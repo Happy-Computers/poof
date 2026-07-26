@@ -1,0 +1,11 @@
+node_modules/
+.repos/effect
+data/
+dist/
+*.log
+.DS_Store
+.zig-cache/
+zig-out/
+stream_proxy/.zig-cache/
+stream_proxy/zig-out/
+.playwright-mcp/
