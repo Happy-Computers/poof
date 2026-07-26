@@ -1,0 +1,11 @@
+.{
+    .name = .stream_proxy,
+    .version = "0.0.0",
+    .fingerprint = 0x3c1a2cd5ee946cfa,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
