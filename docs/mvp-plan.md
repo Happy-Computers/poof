@@ -74,11 +74,13 @@ We are not limited to one language. Each layer uses what it’s best at. Polyglo
 
 ---
 
-## Build ladder (A → F)
+## Build ladder
 
-Each step must be **demoable** before starting the next. Do not skip.
+Each step must be **demoable** before starting the next on the critical path. Letter labels are historical; **execution order is below**.
 
-### A — Range + cache (done)
+### Done
+
+#### A — Range + cache
 **Win:** Play via HTTP without downloading the whole file.
 
 - Zig `stream_proxy`: Range GET, fixed RAM block cache, prefetch, metrics.
@@ -86,7 +88,7 @@ Each step must be **demoable** before starting the next. Do not skip.
 - Proof: VLC (prefer `--avcodec-hw=none` on AMD), `/metrics` moves, bytes ≪ “whole library.”
 - Handoff: UDS binary protocol (`--uds`) + hard caps (`MAX_CONNECTIONS`, `MAX_CONCURRENT_ORIGIN_FILLS`).
 
-### B — Mount read-only (done for local-file demo)
+#### B — Mount read-only
 **Win:** A real folder/drive appears; double-click opens in normal apps.
 
 - **Go** `cmd/space-mount` presents Space as a FUSE filesystem (`hanwen/go-fuse`, `FOPEN_DIRECT_IO`).
@@ -94,30 +96,47 @@ Each step must be **demoable** before starting the next. Do not skip.
 - Still read-only. This is when “the OS decides which bytes” becomes true.
 - Docs: [`docs/space-mount.md`](space-mount.md).
 
-### C — Scrub feels good
-**Win:** Seek/scrub on typical wifi does not feel broken.
+#### S3 origin (read path)
+**Win:** Same mount UX; cold bytes come from object storage, not `--file`.
 
-- Prefetch + cache tuning (and disk-backed cache if needed).
-- Keep hard caps; measure hits/misses and stall rate.
+- **Go** `space-origin` + Zig `--origin-url`. Docs: [`docs/s3-origin.md`](s3-origin.md).
 
-### D — Edit from the mount (proxies OK)
-**Win:** Drop media into Resolve/Premiere from Space; scrub works.
+### Next (critical path)
 
-- Same read path under NLE I/O (many small reads).
-- MVP editing assumes **proxy / compressed** media, not raw camera files.
+#### Multi-file Space
+**Win:** `/tmp/space` looks like a **real folder** — many names, list/open any of them (still read-only). Cloud objects appear immediately and stream for preview (no full download).
 
-### E — Export / write into Space
-**Win:** Save or export into the Space folder; file shows up; upload completes in background.
+- **S3 flat list:** done (`space-mount --bucket` + multi-key origin + proxy `--origin-url`). Docs: [`space-mount.md`](space-mount.md), [`s3-origin.md`](s3-origin.md).
+- Local `--dir` remains a harness only.
+- Seeding the bucket with `aws s3 cp` is **test-only**, not product ingest.
+
+#### E — Export / write into Space
+**Win:** Drag or save into the Space folder; file shows up; upload finishes in background.
 
 - **Go** write-back orchestration → multipart/object upload (cache caps still apply).
 - Crash/partial-upload behavior defined and bounded.
 - Cloud remains source of truth once durable.
+- This is the real product ingest path (users never “upload to S3” directly).
 
-### F — Second device, same Space
+#### F — Second device, same Space
 **Win:** Another machine mounts the same Space and sees the files.
 
 - **Go** shared metadata + auth.
 - Still keep sync semantics simple; no deep merge/locking product yet.
+
+#### D — Edit from the mount (proxies OK)
+**Win:** Drop media into Resolve/Premiere from Space; scrub/edit works.
+
+- Same read (and later write) path under NLE I/O (many small reads).
+- MVP editing assumes **proxy / compressed** media, not raw camera files.
+
+### Parallel / as needed
+
+#### C — Scrub feels good
+**Win:** Seek/scrub on typical wifi does not feel broken.
+
+- Prefetch + cache tuning (and disk-backed cache if needed).
+- Already **somewhat works** on progressive media; tune when seeks feel bad under real S3 latency. Do not block multi-file or E on C.
 
 ---
 
@@ -125,12 +144,14 @@ Each step must be **demoable** before starting the next. Do not skip.
 
 | Step | Status |
 |---|---|
-| A | Done (`stream_proxy` HTTP + UDS + docs/stream_proxy.md) |
-| B | Done for RO mount (`cmd/space-mount` + docs/space-mount.md) |
-| S3 origin (read path) | Done (`cmd/space-origin` + Zig `--origin-url` + docs/s3-origin.md) |
-| C–F | Not started (scrub tuning, NLE, writes, multi-device) |
+| A | Done |
+| B | Done (RO mount) |
+| S3 origin (read) | Done (single object) |
+| Multi-file Space | Done (S3 `--bucket` + local `--dir` harness) |
+| E → F → D | **Next:** E (writes / bg upload), then F (2nd device), D (NLE) |
+| C | Opportunistic (scrub already usable) |
 
-**Next implementation slice when we resume:** **C — scrub feels good** under real S3 latency, and/or multi-file listing before writes (E).
+**Next implementation slice:** **E (writes)** — move/save into `/tmp/space` starts background upload to S3; then **F (2nd device)**, **D (NLE)**.
 
 ---
 

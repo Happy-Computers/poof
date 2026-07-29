@@ -27,16 +27,24 @@ const (
 
 	reqSize = 24
 	hdrSize = 8
+
+	// MaxInflight caps concurrent UDS RPCs per Client.
+	// Must stay below Zig MAX_CONNECTIONS (32) — media players issue many
+	// parallel FUSE reads; one dial-per-RPC without this limit drops clients.
+	MaxInflight = 16
 )
 
 // Client is a thread-safe UDS client to stream_proxy.
-// Each call opens a short-lived connection (simple; matches MAX_CONNECTIONS).
 type Client struct {
 	path string
+	sem  chan struct{} // bounds concurrent dials
 }
 
 func New(path string) *Client {
-	return &Client{path: path}
+	return &Client{
+		path: path,
+		sem:  make(chan struct{}, MaxInflight),
+	}
 }
 
 func (c *Client) dial() (net.Conn, error) {
@@ -119,6 +127,9 @@ func (c *Client) Metrics() (Metrics, error) {
 }
 
 func (c *Client) roundTrip(op uint16, offset uint64, length uint32) ([]byte, error) {
+	c.sem <- struct{}{}
+	defer func() { <-c.sem }()
+
 	conn, err := c.dial()
 	if err != nil {
 		return nil, err

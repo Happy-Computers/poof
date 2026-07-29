@@ -1,71 +1,80 @@
-# space-mount — read-only Space (step B)
+# space-mount — read-only Space
 
-Go FUSE client. Apps see a normal folder; reads go to the Zig block cache over a Unix socket.
+Go FUSE client. Apps see a normal folder; reads stream through the Zig block cache.
+
+**Product proof (this slice):** objects already in the cloud bucket appear under `/tmp/space` and are previewable immediately via ranged reads — no full download first. Putting objects in the bucket with `aws s3 cp` is a **dev/test harness only**, not a product upload path.
 
 ```text
-VLC / Finder
-    │ open / read
-    ▼
-space-mount (Go, hanwen/go-fuse, DIRECT_IO)
-    │ UDS SIZE / READ / INFO
-    ▼
-stream_proxy (Zig cache + local origin file)
+Apps → space-mount --bucket
+         ├─ ListObjectsV2 (flat, Delimiter=/)
+         ├─ embedded multi-key origin (Range GET)
+         └─ ProxyPool → stream_proxy --origin-url
+                └─ miss → S3 GetObject(Range=…)
 ```
 
 ## Prerequisites
 
-- `fuse3` installed (`fusermount3`)
+- `fuse3` (`fusermount3`)
 - Zig `stream_proxy` built (`cd stream_proxy && zig build`)
-- Go 1.21+
+- Go 1.22+
+- AWS credentials (same as `aws` CLI / `.env`)
 
-## Run
-
-Terminal 1 — Zig data plane (HTTP harness optional; UDS required for mount):
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-cd stream_proxy
-./zig-out/bin/stream_proxy \
-  --file /home/amaan/code/video-storage-engine/data/screencast.mp4 \
-  --port 8080 \
-  --uds /tmp/space-cache.sock
-```
-
-Terminal 2 — mount:
+## S3 multi-file (cloud Space)
 
 ```bash
+cd stream_proxy && zig build && cd ..
+
+# Dev harness only — seed the bucket so the mount has something to list:
+# aws s3 cp data/screencast.mp4 s3://YOUR_BUCKET/
+# aws s3 cp data/demo.bin s3://YOUR_BUCKET/
+
 mkdir -p /tmp/space
-go run ./cmd/space-mount --mount /tmp/space --uds /tmp/space-cache.sock
-```
+go run ./cmd/space-mount \
+  --mount /tmp/space \
+  --bucket YOUR_BUCKET \
+  --proxy-bin ./stream_proxy/zig-out/bin/stream_proxy
 
-Play:
-
-```bash
+ls /tmp/space
 vlc --avcodec-hw=none /tmp/space/screencast.mp4
 ```
 
-Unmount: `Ctrl-C` on `space-mount`, or `fusermount3 -u /tmp/space`.
+Unmount: `Ctrl-C`, or `fusermount3 -u /tmp/space`.
 
-Proof (cache still bounded; origin bytes ≈ what was touched):
+Flat bucket root only (`Delimiter=/`). Nested keys ignored. Caps: `MaxSpaceFiles=256`, `MaxActiveProxies=4`.
+
+Catalog **refreshes live** (every ~2s and on `ls`/lookup, min 1s between ListObjects). New objects in the bucket appear in `/tmp/space` without remounting.
+
+Optional: `--prefix`, `--region`, `--profile`, `--endpoint`, `--env-file`.
+
+## Local harness (`--dir`)
+
+Still available for offline FUSE tests without AWS:
 
 ```bash
-curl http://127.0.0.1:8080/metrics
+go run ./cmd/space-mount --mount /tmp/space --dir ./data \
+  --proxy-bin ./stream_proxy/zig-out/bin/stream_proxy
 ```
 
-## UDS protocol (brief)
+## Single-file manual UDS
 
-Little-endian. Request = 24 bytes: `magic=0x53504348`, `version=1`, `op`, `offset`, `length`, `reserved`.
-
-| Op | Meaning |
-|---|---|
-| 1 SIZE | → u64 object size |
-| 2 READ | offset+length → bytes (capped by Zig `MAX_RANGE_BYTES`) |
-| 3 PREFETCH | kick prefetch window |
-| 4 METRICS | fixed 8×u64 counters |
-| 5 INFO | object basename for the mount file name |
-
-Response = `status u32` + `nbytes u32` + payload.
+```bash
+# terminal 1
+go run ./cmd/space-origin --bucket B --key screencast.mp4 --listen 127.0.0.1:9090
+# terminal 2
+./stream_proxy/zig-out/bin/stream_proxy \
+  --origin-url http://127.0.0.1:9090/object \
+  --name screencast.mp4 --uds /tmp/space-cache.sock --port 8080
+# terminal 3
+go run ./cmd/space-mount --mount /tmp/space --uds /tmp/space-cache.sock
+```
 
 ## Limits
 
-Same Zig caps as step A (`limits.zig`): 1 MiB blocks, 512 cache slots, 8 MiB max range, 32 connections, 4 concurrent origin fills.
+Zig: 1 MiB blocks × 512, 8 MiB max range, 4 concurrent origin fills.  
+Go: 256 files, 4 active proxies, S3 8 MiB range / 4 concurrent fetches.
+
+## Not yet (later ladder)
+
+- Writes into Space / background upload (E) — the real product ingest path
+- Second device (F)
+- Nested directories

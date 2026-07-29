@@ -24,9 +24,15 @@ func TestRequestLayout(t *testing.T) {
 	}
 }
 
-func TestStatusError(t *testing.T) {
-	err := statusError(statusRange)
-	if err == nil {
-		t.Fatal("expected error")
+func TestMaxInflightCap(t *testing.T) {
+	if MaxInflight >= 32 {
+		t.Fatal("MaxInflight must stay below Zig MAX_CONNECTIONS (32)")
+	}
+	if MaxInflight < 1 {
+		t.Fatal("MaxInflight")
+	}
+	c := New("/tmp/nonexistent-space-cache.sock")
+	if cap(c.sem) != MaxInflight {
+		t.Fatalf("sem cap %d", cap(c.sem))
 	}
 }

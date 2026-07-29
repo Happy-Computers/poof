@@ -1,112 +1,59 @@
 # S3 origin — stream from object storage
 
-Read path with cloud as source of truth (still one object, still read-only).
+Cloud is source of truth for **reads**. Apps open files in the Space mount; only touched byte ranges hit S3.
+
+`aws s3 cp` (or console upload) is a **dev harness** to put objects in the bucket for demos — not how users ingest media in the product.
 
 ```text
-VLC → space-mount (Go FUSE)
-         │ UDS
+VLC → space-mount --bucket (Go FUSE)
+         │ list + UDS to Zig proxies
          ▼
-   stream_proxy (Zig cache)
+   stream_proxy (Zig cache) --origin-url
          │ miss: HTTP Range GET
          ▼
-   space-origin (Go) → S3 GetObject(Range=…)
+   embedded / space-origin → S3 GetObject(Range=…)
 ```
 
 ## Prerequisites
 
-On this machine AWS CLI lives at `~/.local/bin/aws`. You still need **keys** somewhere the SDK can see them.
-
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
-
-# ONE-TIME: create ~/.aws/credentials (same as normal CLI)
-aws configure
-# Access Key ID / Secret / region (e.g. us-east-1) / output json
-
-# prove it:
+aws configure   # or .env from .env.example
 aws sts get-caller-identity
-aws s3 ls s3://YOUR_BUCKET/screencast.mp4
 ```
 
-Or put keys in a gitignored `.env` (from `.env.example`) in the repo root — `space-origin` loads `.env` / `.env.local` automatically.
+## Preferred: one-command mount
 
-Then either rely on default profile, or pass `--profile` / `--region`.
+See [`space-mount.md`](space-mount.md) — `space-mount --bucket` lists flat objects, embeds the multi-key origin, and pools Zig caches.
 
-Upload example:
+## Standalone origin (debug)
+
+Single object:
 
 ```bash
-aws s3 cp data/screencast.mp4 s3://YOUR_BUCKET/screencast.mp4
-# MinIO:
-# aws --endpoint-url http://127.0.0.1:9000 s3 cp data/screencast.mp4 s3://YOUR_BUCKET/screencast.mp4
+go run ./cmd/space-origin --bucket YOUR_BUCKET --key screencast.mp4 --listen 127.0.0.1:9090
 ```
 
-## Run
-
-Terminal 1 — Go S3 range origin:
+Multi-object (flat list):
 
 ```bash
-go run ./cmd/space-origin \
-  --bucket YOUR_BUCKET \
-  --key screencast.mp4 \
-  --region us-east-1 \
-  --listen 127.0.0.1:9090
-
-# with named profile (same as aws --profile):
-# go run ./cmd/space-origin --bucket B --key K --region us-east-1 --profile YOUR_PROFILE
-
-# MinIO:
-# go run ./cmd/space-origin --bucket B --key K --endpoint http://127.0.0.1:9000 --region us-east-1
+go run ./cmd/space-origin --bucket YOUR_BUCKET --list [--prefix P] --listen 127.0.0.1:9090
+# HEAD/GET http://127.0.0.1:9090/object/<basename>  (Range required on GET)
 ```
 
-Terminal 2 — Zig cache (HTTP origin, no local `--file`):
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-cd stream_proxy && zig build
-./zig-out/bin/stream_proxy \
-  --origin-url http://127.0.0.1:9090/object \
-  --name screencast.mp4 \
-  --uds /tmp/space-cache.sock \
-  --port 8080
-```
-
-Terminal 3 — mount:
-
-```bash
-mkdir -p /tmp/space
-go run ./cmd/space-mount --mount /tmp/space --uds /tmp/space-cache.sock
-vlc --avcodec-hw=none /tmp/space/screencast.mp4
-```
-
-Proof:
-
-```bash
-curl http://127.0.0.1:8080/metrics
-# bytes_from_origin ≈ what you touched; cache_occupancy_blocks capped
-# S3 / space-origin should show Range GETs, not a full-object download
-```
-
-## Local dry-run (no AWS)
-
-Point `--origin-url` at another `stream_proxy --file` HTTP front (same Range contract as `/object`):
-
-```bash
-# origin stand-in
-stream_proxy --file data/screencast.mp4 --port 9090
-# cache
-stream_proxy --origin-url http://127.0.0.1:9090/video.mp4 --name screencast.mp4 --uds /tmp/space-cache.sock
-```
+Then point Zig at `http://127.0.0.1:9090/object/<name>` or use `space-mount --bucket`.
 
 ## Caps
 
 | Limit | Where |
 |---|---|
-| 8 MiB max range | Zig `MAX_RANGE_BYTES` + Go `MaxRangeBytes` |
-| 4 concurrent origin fills | Zig `MAX_CONCURRENT_ORIGIN_FILLS` + Go S3 semaphore |
-| Cache mutex not held across origin HTTP | Zig `ensureBlockPresent` |
+| 8 MiB max range | Zig + Go |
+| 4 concurrent S3 fills | Go semaphore |
+| 256 flat objects | catalog |
+| Cache mutex not held across origin HTTP | Zig |
 
 ## Not yet
 
-- Multi-key listing / multi-file Space
-- Writes / multipart upload
+- Product write / upload path (E)
+- Nested keys as directories
 - Presigned-URL-only mode

@@ -7,6 +7,11 @@
 ## DESIGN
 Whenever you're designing or implementing software — especially Editor API, bridge, MCP, and domain ops — follow [`TIGERSTYLE.md`](TIGERSTYLE.md). It is not optional flavor; it is how this repo decides what ships.
 
+## Basics
+- never write self documenting comments in the code, the code should speak for itself.
+- only write comments in the code if there's a TODO, cleanup or something else remaining or a left behind quirk, else all comments are useless.
+- always use jj for version control
+
 ## Tool Preferences
 - use subagents to parallelize the work
 - use exa mcp for web search always.

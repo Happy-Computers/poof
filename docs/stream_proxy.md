@@ -124,4 +124,4 @@ curl http://127.0.0.1:8080/metrics
 - Not multi-user sync
 - Not uploads / writes
 - Not WebM/ProRes — progressive **MP4 / H.264** with `moov` near the start (`ffmpeg -movflags +faststart`)
-- Multi-file Space (still one object per `stream_proxy` process)
+- Multi-file Space: one object per `stream_proxy` process; Go `space-mount --bucket` (or `--dir` harness) owns listing + bounded proxy pool (`--origin-url` or `--file`)
