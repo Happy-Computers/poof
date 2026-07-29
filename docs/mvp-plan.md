@@ -61,7 +61,7 @@ We are not limited to one language. Each layer uses what it’s best at. Polyglo
 | Layer | Language | Why |
 |---|---|---|
 | Range I/O, fixed block cache, prefetch, hard limits (step A core) | **Zig** | Systems / data plane: fixed RAM, no GC on the cache path, TigerStyle caps. Already proven in `stream_proxy`. |
-| Space client mount, S3/SDK glue, write-back orchestration, auth + shared metadata (B→F) | **Go** | Product / control plane: mature FUSE ecosystem, boring concurrency and networking, natural fit when step F becomes multi-device. Same shape as JuiceFS / rclone-class clients. |
+| Space client mount, S3/SDK glue, write-back orchestration, auth + shared metadata (B→F) | **Go** | Product / control plane: mature FUSE ecosystem, boring concurrency and networking, natural fit when step F becomes multi-device. Same shape as JuiceFS / rclone-class clients. Volume backends are per-OS under `internal/mount/{linux,darwin,windows}` (Linux FUSE today). |
 
 **Rules of thumb**
 - **Zig owns bytes in the cache.** File size never sizes the cache; limits stay explicit.

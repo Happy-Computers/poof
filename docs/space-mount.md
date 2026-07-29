@@ -1,6 +1,18 @@
 # space-mount — read-only Space
 
-Go FUSE client. Apps see a normal folder; reads stream through the Zig block cache.
+Go FUSE client (Linux). Apps see a normal folder; reads stream through the Zig block cache.
+
+## Layout
+
+```text
+cmd/space-mount          CLI flags → mount.Run
+internal/mount           portable Config + Run entry
+  linux/                 FUSE volume backend (go-fuse, fusermount3)
+  darwin/                stub (macFUSE / FSKit later)
+  windows/               stub (WinFsp later)
+internal/{spacecatalog,s3origin,proxypool,cacheclient,awsutil}  shared
+stream_proxy             Zig byte cache (shared data plane)
+```
 
 **Product proof (this slice):** objects already in the cloud bucket appear under `/tmp/space` and are previewable immediately via ranged reads — no full download first. Putting objects in the bucket with `aws s3 cp` is a **dev/test harness only**, not a product upload path.
 

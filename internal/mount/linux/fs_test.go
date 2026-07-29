@@ -1,4 +1,6 @@
-package spacefs
+//go:build linux
+
+package linux
 
 import (
 	"context"

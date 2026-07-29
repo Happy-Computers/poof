@@ -1,5 +1,7 @@
-// Package spacefs is a read-only FUSE filesystem backed by the Zig block cache.
-package spacefs
+//go:build linux
+
+// Package linux is the Linux FUSE volume backend for Space.
+package linux
 
 import (
 	"context"
@@ -121,7 +123,6 @@ func newRootMulti(entries []spacecatalog.Entry, pool *proxypool.Pool, load Catal
 	return r
 }
 
-// Stop halts the background catalog poller.
 func (r *RootMulti) Stop() {
 	r.pollOnce.Do(func() {
 		close(r.stopPoll)
@@ -226,7 +227,6 @@ func (r *RootMulti) refresh(ctx context.Context) {
 		wanted[e.Name] = e
 	}
 
-	// Remove gone.
 	for name := range r.entries {
 		if _, ok := wanted[name]; !ok {
 			delete(r.entries, name)
@@ -234,7 +234,6 @@ func (r *RootMulti) refresh(ctx context.Context) {
 			_ = r.NotifyEntry(name)
 		}
 	}
-	// Add new.
 	for name, e := range wanted {
 		if _, ok := r.entries[name]; ok {
 			r.entries[name] = e
