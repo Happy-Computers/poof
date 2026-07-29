@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta
+        http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self'; script-src 'self';
+            img-src 'none'; connect-src 'none'"
+    >
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Infinity Storage</title>
+    <link rel="stylesheet" href="app.css">
+</head>
+<body>
+    <header>
+        <h1>Infinity Storage</h1>
+        <p class="tagline">Cloud folder that streams</p>
+    </header>
+
+    <main>
+        <section id="auth_signed_out">
+            <label class="field">
+                <span>Name</span>
+                <input id="auth_name" type="text" autocomplete="name" maxlength="100">
+            </label>
+            <label class="field">
+                <span>Email</span>
+                <input id="auth_email" type="email" autocomplete="email" maxlength="320">
+            </label>
+            <label class="field">
+                <span>Password</span>
+                <input
+                    id="auth_password"
+                    type="password"
+                    autocomplete="current-password"
+                    minlength="12"
+                    maxlength="128"
+                >
+            </label>
+            <div class="actions">
+                <button id="btn_sign_in" class="primary" type="button">Sign in</button>
+                <button id="btn_sign_up" type="button">Create account</button>
+                <button id="btn_reset" type="button">Reset password</button>
+            </div>
+        </section>
+
+        <section id="auth_signed_in" hidden>
+            <div class="session_row">
+                <span id="auth_identity"></span>
+                <button id="btn_sign_out" type="button">Sign out</button>
+            </div>
+        </section>
+
+        <p id="auth_status" class="status" data-state="idle"></p>
+
+        <section id="mount_controls" hidden>
+            <label class="field">
+                <span>Mount path</span>
+                <input
+                    id="mount_path"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    maxlength="4096"
+                >
+            </label>
+            <label class="field">
+                <span>Bucket</span>
+                <input
+                    id="bucket"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    maxlength="256"
+                >
+            </label>
+            <p id="status" class="status" data-state="idle">Idle</p>
+            <div class="actions mount_actions">
+                <button id="btn_mount" class="primary" type="button">Mount</button>
+                <button id="btn_unmount" type="button">Unmount</button>
+                <button id="btn_open" type="button">Open folder</button>
+            </div>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-package spacecatalog
+package catalog
 
 import (
 	"fmt"
@@ -79,7 +79,7 @@ func TestLoadDirMaxNameOK(t *testing.T) {
 
 func TestLoadDirTooManyFiles(t *testing.T) {
 	dir := t.TempDir()
-	for i := 0; i < MaxSpaceFiles+1; i++ {
+	for i := 0; i < MaxFiles+1; i++ {
 		mustWrite(t, filepath.Join(dir, fmt.Sprintf("%d.dat", i)), []byte("x"))
 	}
 	_, err := LoadDir(dir)

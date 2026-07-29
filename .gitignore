@@ -9,8 +9,8 @@ zig-out/
 stream_proxy/.zig-cache/
 stream_proxy/zig-out/
 .playwright-mcp/
-/space-origin
-/space-mount
+/infinity-storage-origin
+/infinity-storage-mount
 .env
 .env.local
 .env*.bak

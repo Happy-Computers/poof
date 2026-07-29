@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/amaan/video-storage-engine/internal/cacheclient"
-	"github.com/amaan/video-storage-engine/internal/spacecatalog"
+	"github.com/amaan/infinity-storage/internal/cacheclient"
+	"github.com/amaan/infinity-storage/internal/catalog"
 )
 
 // Hard limits. Change only by deliberate redesign.
@@ -76,7 +76,7 @@ func New(cfg Config) (*Pool, error) {
 	sockDir := cfg.SockDir
 	if !useTCP {
 		if sockDir == "" {
-			sockDir, err = os.MkdirTemp("", "space-proxies-")
+			sockDir, err = os.MkdirTemp("", "infinity-storage-proxies-")
 			if err != nil {
 				return nil, fmt.Errorf("proxypool: sock dir: %w", err)
 			}
@@ -102,7 +102,7 @@ func New(cfg Config) (*Pool, error) {
 }
 
 // Acquire returns a client for entry. Call release when the open is done.
-func (p *Pool) Acquire(entry spacecatalog.Entry) (*cacheclient.Client, func(), error) {
+func (p *Pool) Acquire(entry catalog.Entry) (*cacheclient.Client, func(), error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
@@ -198,7 +198,7 @@ func (p *Pool) evictIdleLocked() bool {
 	return true
 }
 
-func (p *Pool) spawnLocked(entry spacecatalog.Entry, key string) (*slot, error) {
+func (p *Pool) spawnLocked(entry catalog.Entry, key string) (*slot, error) {
 	p.seq++
 
 	var endpoint string

@@ -10,12 +10,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/amaan/video-storage-engine/internal/mount/linux"
+	"github.com/amaan/infinity-storage/internal/mount/linux"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
-// Run attaches a Space volume via Linux FUSE.
+// Run attaches a Infinity Storage volume via Linux FUSE.
 func Run(cfg Config) error {
 	if cfg.MountPoint == "" {
 		return fmt.Errorf("mount: MountPoint required")
@@ -40,8 +40,8 @@ func Run(cfg Config) error {
 		MountOptions: fuse.MountOptions{
 			AllowOther: false,
 			Debug:      cfg.Debug,
-			FsName:     "space",
-			Name:       "space",
+			FsName:     "infinity-storage",
+			Name:       "infinity-storage",
 			Options:    []string{"ro", "default_permissions"},
 		},
 	}

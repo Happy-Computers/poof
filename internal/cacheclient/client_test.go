@@ -31,7 +31,7 @@ func TestMaxInflightCap(t *testing.T) {
 	if MaxInflight < 1 {
 		t.Fatal("MaxInflight")
 	}
-	c := New("/tmp/nonexistent-space-cache.sock")
+	c := New("/tmp/nonexistent-infinity-storage-cache.sock")
 	if cap(c.sem) != MaxInflight {
 		t.Fatalf("sem cap %d", cap(c.sem))
 	}

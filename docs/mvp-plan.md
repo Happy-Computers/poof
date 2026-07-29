@@ -1,14 +1,14 @@
-# MVP plan — Space (mount + stream)
+# MVP plan — Infinity Storage (mount + stream)
 
 ## Goal
 
-Ship a personal **Space**: a folder/drive on the user’s machine that looks local, while file bytes live in our storage.
+Ship a personal **Infinity Storage**: a folder/drive on the user’s machine that looks local, while file bytes live in our storage.
 
 User opens, scrubs, edits, and exports with **normal apps** (VLC, Resolve, Premiere, Finder). We stream only the bytes the OS asks for. Laptop disk use stays **capped**; library size is not limited by free space.
 
 North-star feel (same category as getspace.so):
 
-> Mount Space → apps work as usual → OS requests byte ranges → we fetch/upload those blocks → cloud is source of truth.
+> Mount Infinity Storage → apps work as usual → OS requests byte ranges → we fetch/upload those blocks → cloud is source of truth.
 
 Not Dropbox sync. Not “download then open.” **File streaming.**
 
@@ -16,12 +16,12 @@ Not Dropbox sync. Not “download then open.” **File streaming.**
 
 ## Success demo (definition of done for the MVP arc)
 
-1. Space mounts as a normal folder/drive.
-2. Space holds far more media than local free disk.
+1. Infinity Storage mounts as a normal folder/drive.
+2. Infinity Storage holds far more media than local free disk.
 3. Open a large clip → plays in a media player in seconds (no full download).
 4. Scrub → playhead moves without a “downloading whole file” wait.
 5. (Later in ladder) NLE can open/scrub from the mount.
-6. (Later in ladder) Export/save into Space; upload finishes in background.
+6. (Later in ladder) Export/save into Infinity Storage; upload finishes in background.
 7. Metrics prove: local cache ≪ library size; origin bytes ≈ what was touched.
 
 ---
@@ -31,7 +31,7 @@ Not Dropbox sync. Not “download then open.” **File streaming.**
 These are hard. Do not “just for now” violate them.
 
 ### Product
-- **One user, one Space, one machine** until step F.
+- **One user, one Infinity Storage library, one machine** until step F.
 - **No team sync / locking / version merge** before F.
 - **No offline-first promise.** Uncached bytes need network. Pinning is later.
 - **Do not claim true zero disk.** Claim **bounded cache**; implement bounded cache.
@@ -61,7 +61,7 @@ We are not limited to one language. Each layer uses what it’s best at. Polyglo
 | Layer | Language | Why |
 |---|---|---|
 | Range I/O, fixed block cache, prefetch, hard limits (step A core) | **Zig** | Systems / data plane: fixed RAM, no GC on the cache path, TigerStyle caps. Already proven in `stream_proxy`. |
-| Space client mount, S3/SDK glue, write-back orchestration, auth + shared metadata (B→F) | **Go** | Product / control plane: FUSE on Linux (`internal/mount/linux`), WinFsp/cgofuse on Windows (`internal/mount/windows`), boring concurrency and networking. Same shape as JuiceFS / rclone-class clients. |
+| Infinity Storage client mount, S3/SDK glue, write-back orchestration, auth + shared metadata (B→F) | **Go** | Product / control plane: FUSE on Linux (`internal/mount/linux`), WinFsp/cgofuse on Windows (`internal/mount/windows`), boring concurrency and networking. Same shape as JuiceFS / rclone-class clients. |
 
 **Rules of thumb**
 - **Zig owns bytes in the cache.** File size never sizes the cache; limits stay explicit.
@@ -91,60 +91,71 @@ Each step must be **demoable** before starting the next on the critical path. Le
 #### B — Mount read-only
 **Win:** A real folder/drive appears; double-click opens in normal apps.
 
-- **Go** `cmd/space-mount` presents Space as a FUSE filesystem (`hanwen/go-fuse`, `FOPEN_DIRECT_IO`).
+- **Go** `cmd/infinity-storage-mount` presents Infinity Storage as a FUSE filesystem (`hanwen/go-fuse`, `FOPEN_DIRECT_IO`).
 - Read path reuses the **Zig** block cache + origin over SPCH/UDS (local file first).
 - Still read-only. This is when “the OS decides which bytes” becomes true.
-- Docs: [`space-mount.md`](space-mount.md).
+- Docs: [`infinity-storage-mount.md`](infinity-storage-mount.md).
 
 #### S3 origin (read path)
 **Win:** Same mount UX; cold bytes come from object storage, not `--file`.
 
-- **Go** `space-origin` + Zig `--origin-url`. Docs: [`docs/s3-origin.md`](s3-origin.md).
+- **Go** `infinity-storage-origin` + Zig `--origin-url`. Docs: [`docs/s3-origin.md`](s3-origin.md).
 
-#### Multi-file Space
-**Win:** `/tmp/space` looks like a **real folder** — many names, list/open any of them (still read-only). Cloud objects appear and stream for preview (no full download).
+#### Multi-file Infinity Storage
+**Win:** `/tmp/infinity-storage` looks like a **real folder** — many names, list/open any of them (still read-only). Cloud objects appear and stream for preview (no full download).
 
-- **S3 flat list** + live catalog refresh (`space-mount --bucket`). Docs: [`space-mount.md`](space-mount.md), [`s3-origin.md`](s3-origin.md).
+- **S3 flat list** + live catalog refresh (`infinity-storage-mount --bucket`). Docs: [`infinity-storage-mount.md`](infinity-storage-mount.md), [`s3-origin.md`](s3-origin.md).
 - Local `--dir` remains a harness only. `aws s3 cp` is **test-only** seeding, not product ingest.
 - Go UDS/TCP client caps inflight RPCs under Zig `MAX_CONNECTIONS` so media players do not drop on open.
 - Docs: [`architecture.md`](architecture.md), [`spch.md`](spch.md).
 
 #### Windows RO mount
-**Win:** Same Space UX on Windows — drive letter (e.g. `Z:`) lists cloud objects; Explorer/VLC stream ranges via WinFsp + Zig cache over TCP SPCH.
+**Win:** Same Infinity Storage UX on Windows — drive letter (e.g. `Z:`) lists cloud objects; Explorer/VLC stream ranges via WinFsp + Zig cache over TCP SPCH.
 
 - **Go** `internal/mount/windows` (cgofuse / WinFsp); shared `mount.Prepare`.
 - `stream_proxy --listen-tcp` (proxypool default on `GOOS=windows`).
-- Docs: [`space-mount.md`](space-mount.md) Windows section, [`architecture.md`](architecture.md), [`spch.md`](spch.md).
+- Docs: [`infinity-storage-mount.md`](infinity-storage-mount.md) Windows section, [`architecture.md`](architecture.md), [`spch.md`](spch.md).
 
 ### Next (critical path)
 
-#### Native app (language TBD)
-**Win:** User installs Space, logs in later, clicks Mount / Open Explorer — no terminal.
+Detailed design and test gates: [`write-sync-edit-plan.md`](write-sync-edit-plan.md).
 
-- Thin shell over the same `mount.Run` agent (Linux + Windows).
-- Language chosen when UI work starts.
+#### Native app (Electron)
+**Win:** User installs Infinity Storage, logs in, clicks Mount / Open Explorer — no terminal.
 
-#### F — Auth + shared metadata + second device
-**Win:** Linux + Windows mounts share one catalog within ~1s; bytes still stream from S3.
+- Thin Electron shell (`desktop/`) over the same `mount.Run` agent (Linux + Windows).
+- Better Auth email/password through the separate `infinity-storage-api` service.
+- Plain HTML/CSS/JS — no UI framework.
+- Docs: [`infinity-storage-desktop.md`](infinity-storage-desktop.md).
 
-- Supabase Auth + Postgres catalog (public meta API).
-- Mount polls/subscribes meta (listing no longer polls `ListObjects` on the hot path).
-- Dual-device proof: one Linux + one Windows against the same Space.
-- Still keep sync semantics simple; no deep merge/locking. Writes not required for this demo.
+#### E — Bounded write into Infinity Storage
+**Win:** Copy a new file into either mount; peers serve it while S3 persists it in the background.
 
-#### E — Export / write into Space
-**Win:** Drag or save into the Space folder; file shows up; upload finishes in background.
+- Go retains accepted bytes in a bounded active-ingest spool and uploads fixed multipart parts.
+- The writer serves available ranges before S3 completion.
+- Unwritten ranges wait within a deadline and never return fabricated zeros.
+- New flat files only; overwrite, rename, random writes, and directories wait for D.
+- Linux and Windows pass write, peer-range, reopen, hash, crash, and network-failure gates.
+- The first harness uses manually configured credentials and source routing.
 
-- **Go** write-back orchestration → multipart/object upload (cache caps still apply).
-- Crash/partial-upload behavior defined and bounded.
-- Cloud remains source of truth once durable.
-- Real product ingest (users never upload to S3 directly). After F’s metadata hub, register files on write.
+#### F — Account-owned shared library + second device
+**Win:** As soon as a drag starts writing bytes, the file appears on the other mount and previews
+from the writer while S3 upload continues in the background.
+
+- Better Auth runs on Supabase Postgres through `infinity-storage-api`.
+- Postgres owns libraries, source state, upload reservations, conflicts, and catalog generations.
+- The API gives Go short-lived storage authority; permanent AWS credentials leave the clients.
+- An authenticated relay routes observer ranges to the writer through NAT.
+- Linux writes one file and Windows previews it before S3 completion, then the direction reverses.
+- Verified S3 completion atomically moves range authority from the writer to object storage.
+- Discovery p95 targets below 1 second; peer preview targets below 2 seconds when ranges exist.
 
 #### D — Edit from the mount (proxies OK)
-**Win:** Drop media into Resolve/Premiere from Space; scrub/edit works.
+**Win:** Resolve or Premiere opens, scrubs, and saves proxy/compressed media through the mount.
 
-- Same read (and later write) path under NLE I/O (many small reads).
-- MVP editing assumes **proxy / compressed** media, not raw camera files.
+- Add observed NLE semantics: random writes, truncate, temp-file rename, replacement, and leases.
+- Invalidate cached versions explicitly; never silently accept conflicting writers.
+- Camera RAW and large ProRes remain outside the first D proof.
 
 ### Parallel / as needed
 
@@ -163,15 +174,16 @@ Each step must be **demoable** before starting the next on the critical path. Le
 | A | Done |
 | B | Done (RO mount, Linux) |
 | S3 origin (read) | Done |
-| Multi-file Space | Done (S3 live catalog) |
+| Multi-file Infinity Storage | Done (S3 live catalog) |
 | Windows RO mount | Done (WinFsp/cgofuse + TCP SPCH) |
-| Native app | **Next** (language TBD) |
-| F | After native shell — Supabase auth + Postgres catalog; Linux+Windows dual-device |
-| E | After F (writes / bg upload) |
-| D | After E |
+| Native app | Done (Electron email/password + mount shell) |
+| E | **Next** — bounded ingest spool, live peer ranges, and background S3 upload |
+| F | Auth scaffolded; add account-owned rendezvous, relay, and source generations |
+| D | After E durability and F cross-device visibility pass |
 | C | Opportunistic |
 
-**Next implementation slice:** native app shell (language TBD), then **F** (Supabase auth + Postgres catalog) and Linux+Windows dual-device test.
+**Next implementation slice:** build the bounded Go ingest spool plus multipart uploader and live
+range origin, then connect Linux FUSE and Windows WinFsp create/write/flush/release operations.
 
 ---
 
@@ -181,21 +193,20 @@ Each step must be **demoable** before starting the next on the critical path. Le
 [Apps: VLC / NLE / Explorer / Finder]
         │ normal open / read / write
         ▼
-[Space client — Go]
-  • mount (FUSE Linux / WinFsp Windows)
-  • metadata (names, sizes)
-  • write-back orchestration (from E)
-  • auth + multi-device (from F)
-        │ SPCH ranged byte requests (UDS or TCP)
+[Writer mount — Go]
+  • bounded active-ingest spool
+  • S3 multipart upload in background
+  • live range origin until durable
+        │ authenticated range relay
         ▼
-[Data plane — Zig]
-  • fixed block cache + prefetch
-  • hard limits (never sized by file)
-        │ range get / put parts
-        ▼
-[Object storage]
+[Observer mount — Go → Zig cache]
+  • streams only requested available ranges
+
+After verified S3 completion:
+
+[Observer mount — Go → Zig cache] → range GET → [Object storage]
 ```
 
-Step A proved the Zig **read** path over HTTP.  
-Steps B+ put a Go mount in front so every app becomes a client without knowing Space exists.  
+Step A proved the Zig **read** path over HTTP.
+Steps B+ put a Go mount in front so every app becomes a client without knowing Infinity Storage exists.
 Windows uses the same Prepare/proxypool path with WinFsp + TCP SPCH. Full map: [`architecture.md`](architecture.md).

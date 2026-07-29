@@ -1,4 +1,4 @@
-# SPCH — Space Cache Protocol
+# SPCH — Infinity Storage Cache Protocol
 
 Binary protocol between **Go** (`internal/cacheclient`, `proxypool`) and **Zig** (`stream_proxy`).  
 Same framing on Unix domain sockets and TCP. Not HTTP.
@@ -103,8 +103,8 @@ n, err := c.ReadAt(buf, offset)
 Manual mount against TCP SPCH:
 
 ```bash
-space-mount --mount Z: --uds 127.0.0.1:9191   # Windows
-space-mount --mount /tmp/space --uds /tmp/p.sock  # Linux UDS
+infinity-storage-mount --mount Z: --uds 127.0.0.1:9191   # Windows
+infinity-storage-mount --mount /tmp/infinity-storage --uds /tmp/p.sock  # Linux UDS
 ```
 
 (`--uds` CLI flag accepts a Unix path **or** `host:port`; Prepare() picks TCP when `net.SplitHostPort` succeeds.)

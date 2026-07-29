@@ -6,13 +6,13 @@ import (
 	"path"
 	"strings"
 
-	"github.com/amaan/video-storage-engine/internal/spacecatalog"
+	"github.com/amaan/infinity-storage/internal/catalog"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 // ListFlat lists non-nested objects under prefix using Delimiter="/".
-// Nested "folders" (CommonPrefixes) are ignored — flat Space only.
+// Nested "folders" (CommonPrefixes) are ignored — flat Infinity Storage only.
 func ListFlat(ctx context.Context, client *s3.Client, bucket, prefix string) ([]ObjectMeta, error) {
 	if bucket == "" {
 		return nil, fmt.Errorf("bucket required")
@@ -22,9 +22,9 @@ func ListFlat(ctx context.Context, client *s3.Client, bucket, prefix string) ([]
 	}
 
 	var (
-		out      []ObjectMeta
-		seen     = make(map[string]struct{})
-		token    *string
+		out       []ObjectMeta
+		seen      = make(map[string]struct{})
+		token     *string
 		pageGuard = 64 // hard cap on list pages
 	)
 
@@ -59,8 +59,8 @@ func ListFlat(ctx context.Context, client *s3.Client, bucket, prefix string) ([]
 			if name == "." || name == "/" || name == "" {
 				continue
 			}
-			if len(name) > spacecatalog.MaxNameBytes {
-				return nil, fmt.Errorf("name too long (%d > %d): %q", len(name), spacecatalog.MaxNameBytes, name)
+			if len(name) > catalog.MaxNameBytes {
+				return nil, fmt.Errorf("name too long (%d > %d): %q", len(name), catalog.MaxNameBytes, name)
 			}
 			if obj.Size == nil || *obj.Size <= 0 {
 				return nil, fmt.Errorf("empty object not allowed: %q", name)
@@ -68,8 +68,8 @@ func ListFlat(ctx context.Context, client *s3.Client, bucket, prefix string) ([]
 			if _, ok := seen[name]; ok {
 				return nil, fmt.Errorf("duplicate basename: %q", name)
 			}
-			if len(out) >= spacecatalog.MaxSpaceFiles {
-				return nil, fmt.Errorf("too many files (>%d) in s3://%s/%s", spacecatalog.MaxSpaceFiles, bucket, prefix)
+			if len(out) >= catalog.MaxFiles {
+				return nil, fmt.Errorf("too many files (>%d) in s3://%s/%s", catalog.MaxFiles, bucket, prefix)
 			}
 			seen[name] = struct{}{}
 			out = append(out, ObjectMeta{

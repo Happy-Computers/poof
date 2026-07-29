@@ -1,4 +1,4 @@
-// Package awsutil loads local AWS config the same way space-origin does.
+// Package awsutil loads local AWS config the same way infinity-storage-origin does.
 package awsutil
 
 import (

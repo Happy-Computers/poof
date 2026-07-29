@@ -1,6 +1,6 @@
 //go:build windows
 
-// Package windows is the WinFsp (cgofuse) volume backend for Space.
+// Package windows is the WinFsp (cgofuse) volume backend for Infinity Storage.
 package windows
 
 import (
@@ -11,24 +11,24 @@ import (
 	"sync"
 	"time"
 
-	"github.com/amaan/video-storage-engine/internal/cacheclient"
-	"github.com/amaan/video-storage-engine/internal/proxypool"
-	"github.com/amaan/video-storage-engine/internal/s3origin"
-	"github.com/amaan/video-storage-engine/internal/spacecatalog"
+	"github.com/amaan/infinity-storage/internal/cacheclient"
+	"github.com/amaan/infinity-storage/internal/catalog"
+	"github.com/amaan/infinity-storage/internal/proxypool"
+	"github.com/amaan/infinity-storage/internal/s3origin"
 	"github.com/winfsp/cgofuse/fuse"
 )
 
-// CatalogLoader re-lists Space entries. Nil means static catalog.
-type CatalogLoader func(ctx context.Context) ([]spacecatalog.Entry, error)
+// CatalogLoader re-lists Infinity Storage entries. Nil means static catalog.
+type CatalogLoader func(ctx context.Context) ([]catalog.Entry, error)
 
-// SpaceFS is a read-only flat Space volume for WinFsp via cgofuse.
-type SpaceFS struct {
+// InfinityStorageFS is a read-only flat Infinity Storage volume for WinFsp via cgofuse.
+type InfinityStorageFS struct {
 	fuse.FileSystemBase
 
 	pool *proxypool.Pool
 
 	mu          sync.Mutex
-	entries     map[string]spacecatalog.Entry
+	entries     map[string]catalog.Entry
 	load        CatalogLoader
 	lastRefresh time.Time
 	stopPoll    chan struct{}
@@ -39,7 +39,7 @@ type SpaceFS struct {
 	singleName string
 	singleSize uint64
 
-	handles   map[uint64]*openHandle
+	handles    map[uint64]*openHandle
 	nextHandle uint64
 }
 
@@ -50,12 +50,12 @@ type openHandle struct {
 }
 
 // NewMulti builds a multi-file root (optional live loader).
-func NewMulti(entries []spacecatalog.Entry, pool *proxypool.Pool, load CatalogLoader) *SpaceFS {
-	m := make(map[string]spacecatalog.Entry, len(entries))
+func NewMulti(entries []catalog.Entry, pool *proxypool.Pool, load CatalogLoader) *InfinityStorageFS {
+	m := make(map[string]catalog.Entry, len(entries))
 	for _, e := range entries {
 		m[e.Name] = e
 	}
-	fs := &SpaceFS{
+	fs := &InfinityStorageFS{
 		pool:       pool,
 		entries:    m,
 		load:       load,
@@ -69,9 +69,9 @@ func NewMulti(entries []spacecatalog.Entry, pool *proxypool.Pool, load CatalogLo
 	return fs
 }
 
-// NewSingle builds a single-file Space root.
-func NewSingle(client *cacheclient.Client, name string, size uint64) *SpaceFS {
-	return &SpaceFS{
+// NewSingle builds a single-file Infinity Storage root.
+func NewSingle(client *cacheclient.Client, name string, size uint64) *InfinityStorageFS {
+	return &InfinityStorageFS{
 		single:     client,
 		singleName: name,
 		singleSize: size,
@@ -82,22 +82,22 @@ func NewSingle(client *cacheclient.Client, name string, size uint64) *SpaceFS {
 }
 
 // Stop halts the background catalog poller.
-func (f *SpaceFS) Stop() {
+func (f *InfinityStorageFS) Stop() {
 	f.pollOnce.Do(func() {
 		close(f.stopPoll)
 	})
 }
 
-func (f *SpaceFS) Init() {
+func (f *InfinityStorageFS) Init() {
 	f.FileSystemBase.Init()
 }
 
-func (f *SpaceFS) Destroy() {
+func (f *InfinityStorageFS) Destroy() {
 	f.Stop()
 	f.FileSystemBase.Destroy()
 }
 
-func (f *SpaceFS) Getattr(p string, stat *fuse.Stat_t, fh uint64) (errc int) {
+func (f *InfinityStorageFS) Getattr(p string, stat *fuse.Stat_t, fh uint64) (errc int) {
 	p = cleanPath(p)
 	if p == "/" {
 		stat.Mode = fuse.S_IFDIR | 0555
@@ -129,7 +129,7 @@ func (f *SpaceFS) Getattr(p string, stat *fuse.Stat_t, fh uint64) (errc int) {
 	return 0
 }
 
-func (f *SpaceFS) Open(p string, flags int) (errc int, fh uint64) {
+func (f *InfinityStorageFS) Open(p string, flags int) (errc int, fh uint64) {
 	_ = flags
 	p = cleanPath(p)
 	name := strings.TrimPrefix(p, "/")
@@ -173,7 +173,7 @@ func (f *SpaceFS) Open(p string, flags int) (errc int, fh uint64) {
 	return 0, fh
 }
 
-func (f *SpaceFS) Release(p string, fh uint64) int {
+func (f *InfinityStorageFS) Release(p string, fh uint64) int {
 	_ = p
 	f.mu.Lock()
 	h, ok := f.handles[fh]
@@ -187,7 +187,7 @@ func (f *SpaceFS) Release(p string, fh uint64) int {
 	return 0
 }
 
-func (f *SpaceFS) Read(p string, buff []byte, ofst int64, fh uint64) (n int) {
+func (f *InfinityStorageFS) Read(p string, buff []byte, ofst int64, fh uint64) (n int) {
 	_ = p
 	f.mu.Lock()
 	h, ok := f.handles[fh]
@@ -213,7 +213,7 @@ func (f *SpaceFS) Read(p string, buff []byte, ofst int64, fh uint64) (n int) {
 	return got
 }
 
-func (f *SpaceFS) Readdir(p string,
+func (f *InfinityStorageFS) Readdir(p string,
 	fill func(name string, stat *fuse.Stat_t, ofst int64) bool,
 	ofst int64,
 	fh uint64,
@@ -247,7 +247,7 @@ func (f *SpaceFS) Readdir(p string,
 	return 0
 }
 
-func (f *SpaceFS) maybeRefresh() {
+func (f *InfinityStorageFS) maybeRefresh() {
 	if f.load == nil {
 		return
 	}
@@ -260,7 +260,7 @@ func (f *SpaceFS) maybeRefresh() {
 	f.refresh(context.Background())
 }
 
-func (f *SpaceFS) pollCatalog() {
+func (f *InfinityStorageFS) pollCatalog() {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -273,7 +273,7 @@ func (f *SpaceFS) pollCatalog() {
 	}
 }
 
-func (f *SpaceFS) refresh(ctx context.Context) {
+func (f *InfinityStorageFS) refresh(ctx context.Context) {
 	if f.load == nil {
 		return
 	}
@@ -284,7 +284,7 @@ func (f *SpaceFS) refresh(ctx context.Context) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lastRefresh = time.Now()
-	wanted := make(map[string]spacecatalog.Entry, len(entries))
+	wanted := make(map[string]catalog.Entry, len(entries))
 	for _, e := range entries {
 		wanted[e.Name] = e
 	}

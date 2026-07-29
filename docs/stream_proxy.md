@@ -7,18 +7,18 @@ Two fronts share one cache:
 ```text
 VLC  --HTTP Range-->  stream_proxy  --read slices-->  origin (file or HTTP)
                            |
-space-mount --SPCH--------→ +-- RAM block cache (fixed size)
+infinity-storage-mount --SPCH--------→ +-- RAM block cache (fixed size)
               UDS (Linux) or TCP 127.0.0.1 (Windows)
 ```
 
-HTTP is the step‑A harness. SPCH is the mount seam for Go (`space-mount`). Wire format: [`spch.md`](spch.md). Architecture: [`architecture.md`](architecture.md).
+HTTP is the step‑A harness. SPCH is the mount seam for Go (`infinity-storage-mount`). Wire format: [`spch.md`](spch.md). Architecture: [`architecture.md`](architecture.md).
 
 ---
 
 ## Files (what each one does)
 
 ### `stream_proxy/build.zig`
-Build recipe. `zig build` produces `zig-out/bin/stream_proxy`.  
+Build recipe. `zig build` produces `zig-out/bin/stream_proxy`.
 Windows: `zig build -Dtarget=x86_64-windows-gnu` → `stream_proxy.exe`.
 
 ### `stream_proxy/build.zig.zon`
@@ -48,7 +48,7 @@ Doorway into the program.
 4. Serve HTTP and/or SPCH (UDS or TCP) on the same `BlockCache`
 
 ### `stream_proxy/src/origin.zig`
-Pluggable origin for cache fills: `FileOrigin` (local file) or `HttpOrigin` (HTTP Range → e.g. `space-origin` / S3). See [`docs/s3-origin.md`](s3-origin.md).
+Pluggable origin for cache fills: `FileOrigin` (local file) or `HttpOrigin` (HTTP Range → e.g. `infinity-storage-origin` / S3). See [`docs/s3-origin.md`](s3-origin.md).
 
 ### `stream_proxy/src/block_cache.zig`
 The “smart disk reader.”
@@ -75,15 +75,15 @@ The HTTP front door VLC talks to.
 | `GET /metrics` | Print the counters (proof we didn’t download everything) |
 
 ### `stream_proxy/src/protocol.zig` + `spch.zig` + `uds.zig` / `tcp_spch.zig`
-Binary SPCH protocol for Go (`space-mount`). Ops: SIZE, READ, PREFETCH, METRICS, INFO.  
-Linux: `--uds PATH`. Windows: `--listen-tcp HOST:PORT`. Full layout: [`spch.md`](spch.md). Mount how-to: [`space-mount.md`](space-mount.md).
+Binary SPCH protocol for Go (`infinity-storage-mount`). Ops: SIZE, READ, PREFETCH, METRICS, INFO.
+Linux: `--uds PATH`. Windows: `--listen-tcp HOST:PORT`. Full layout: [`spch.md`](spch.md). Mount how-to: [`infinity-storage-mount.md`](infinity-storage-mount.md).
 
 ---
 
 ## How a play looks (one sentence each)
 
 1. You start the proxy pointing at one progressive MP4 (or an HTTP origin URL).
-2. VLC opens `http://127.0.0.1:PORT/video.mp4` **or** a path under the Space mount.
+2. VLC opens `http://127.0.0.1:PORT/video.mp4` **or** a path under the Infinity Storage mount.
 3. Client asks for byte slices, not the whole file.
 4. Cache serves hot slices from RAM; cold slices come from origin once.
 5. Scrub = new offset; old prefetch window is abandoned.
@@ -99,7 +99,7 @@ zig build
 ./zig-out/bin/stream_proxy \
   --file /path/to/screencast.mp4 \
   --port 8080 \
-  --uds /tmp/space-cache.sock
+  --uds /tmp/infinity-storage-cache.sock
 ```
 
 TCP SPCH (Windows / portable):
@@ -118,7 +118,7 @@ HTTP demo:
 vlc --avcodec-hw=none http://127.0.0.1:8080/video.mp4
 ```
 
-Mount demo: see [`docs/space-mount.md`](space-mount.md).
+Mount demo: see [`docs/infinity-storage-mount.md`](infinity-storage-mount.md).
 
 (`--avcodec-hw=none` avoids AMD VA-API `get_buffer() failed` / black screen on some machines.)
 
@@ -137,4 +137,4 @@ curl http://127.0.0.1:8080/metrics
 - Not multi-user sync
 - Not uploads / writes
 - Not WebM/ProRes — progressive **MP4 / H.264** with `moov` near the start (`ffmpeg -movflags +faststart`)
-- Multi-file Space: one object per `stream_proxy` process; Go `space-mount --bucket` (or `--dir` harness) owns listing + bounded proxy pool (`--origin-url` or `--file`)
+- Multi-file Infinity Storage: one object per `stream_proxy` process; Go `infinity-storage-mount --bucket` (or `--dir` harness) owns listing + bounded proxy pool (`--origin-url` or `--file`)

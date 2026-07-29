@@ -1,21 +1,21 @@
-// Package spacecatalog builds a flat name → local-file map for multi-file Space.
-package spacecatalog
+// Package catalog builds a flat name → local-file map for Infinity Storage.
+package catalog
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"net/url"
 )
 
 // Hard limits. Change only by deliberate redesign.
 const (
-	MaxSpaceFiles = 256
-	MaxNameBytes  = 255
+	MaxFiles     = 256
+	MaxNameBytes = 255
 )
 
-// Entry is one regular file in the Space folder.
+// Entry is one regular file in the Infinity Storage folder.
 type Entry struct {
 	Name      string // basename only
 	AbsPath   string // local --dir mode
@@ -85,8 +85,8 @@ func LoadDir(dir string) ([]Entry, error) {
 		if _, ok := seen[name]; ok {
 			return nil, fmt.Errorf("duplicate basename: %q", name)
 		}
-		if len(out) >= MaxSpaceFiles {
-			return nil, fmt.Errorf("too many files (>%d) in %s", MaxSpaceFiles, abs)
+		if len(out) >= MaxFiles {
+			return nil, fmt.Errorf("too many files (>%d) in %s", MaxFiles, abs)
 		}
 		seen[name] = struct{}{}
 		out = append(out, Entry{

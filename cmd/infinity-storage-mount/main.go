@@ -6,14 +6,14 @@ import (
 	"log"
 	"os"
 
-	"github.com/amaan/video-storage-engine/internal/mount"
+	"github.com/amaan/infinity-storage/internal/mount"
 )
 
 func main() {
 	mountPoint := flag.String("mount", "", "mount point (Linux dir, or Windows drive letter e.g. Z:)")
 	udsPath := flag.String("uds", "", "stream_proxy SPCH endpoint: Unix socket path, or host:port for TCP")
 	originDir := flag.String("dir", "", "local origin directory (multi-file harness)")
-	bucket := flag.String("bucket", "", "S3 bucket (multi-file cloud Space)")
+	bucket := flag.String("bucket", "", "S3 bucket (multi-file Infinity Storage)")
 	prefix := flag.String("prefix", "", "S3 key prefix for flat listing (Delimiter=/)")
 	endpoint := flag.String("endpoint", "", "custom S3 endpoint (path-style)")
 	region := flag.String("region", "", "AWS region")
@@ -39,7 +39,7 @@ func main() {
 		modes++
 	}
 	if modes != 1 {
-		fmt.Fprintf(os.Stderr, "space-mount: provide exactly one of --bucket, --dir, or --uds\n")
+		fmt.Fprintf(os.Stderr, "infinity-storage-mount: provide exactly one of --bucket, --dir, or --uds\n")
 		usage()
 		os.Exit(2)
 	}
@@ -64,7 +64,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintf(os.Stderr, "usage:\n")
-	fmt.Fprintf(os.Stderr, "  space-mount --mount DIR|Z: --bucket BUCKET [--prefix P] [--proxy-bin PATH]\n")
-	fmt.Fprintf(os.Stderr, "  space-mount --mount DIR|Z: --dir ORIGIN_DIR [--proxy-bin PATH]\n")
-	fmt.Fprintf(os.Stderr, "  space-mount --mount DIR|Z: --uds SOCK|HOST:PORT\n")
+	fmt.Fprintf(os.Stderr, "  infinity-storage-mount --mount DIR|Z: --bucket BUCKET [--prefix P] [--proxy-bin PATH]\n")
+	fmt.Fprintf(os.Stderr, "  infinity-storage-mount --mount DIR|Z: --dir ORIGIN_DIR [--proxy-bin PATH]\n")
+	fmt.Fprintf(os.Stderr, "  infinity-storage-mount --mount DIR|Z: --uds SOCK|HOST:PORT\n")
 }

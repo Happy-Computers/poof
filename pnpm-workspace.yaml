@@ -1,0 +1,7 @@
+packages:
+    - api
+    - desktop
+
+allowBuilds:
+    electron: true
+    esbuild: true

@@ -1,7 +1,7 @@
-# Architecture — Space (mount + stream)
+# Architecture — Infinity Storage (mount + stream)
 
-How the pieces fit. Product ladder and demo order: [`mvp-plan.md`](mvp-plan.md).  
-Operator how-tos: [`space-mount.md`](space-mount.md), [`s3-origin.md`](s3-origin.md), [`stream_proxy.md`](stream_proxy.md).  
+How the pieces fit. Product ladder and demo order: [`mvp-plan.md`](mvp-plan.md).
+Operator how-tos: [`infinity-storage-mount.md`](infinity-storage-mount.md), [`s3-origin.md`](s3-origin.md), [`stream_proxy.md`](stream_proxy.md).
 Cache IPC wire format: [`spch.md`](spch.md).
 
 ---
@@ -12,8 +12,8 @@ Cache IPC wire format: [`spch.md`](spch.md).
 [Apps: VLC / Explorer / Finder / NLE]
         │ open / read / seek  (OS filesystem API)
         ▼
-[Space client — Go]
-  cmd/space-mount → internal/mount.Run
+[Infinity Storage client — Go]
+  cmd/infinity-storage-mount → internal/mount.Run
     • Linux:  FUSE (hanwen/go-fuse)     internal/mount/linux
     • Windows: WinFsp (cgofuse)         internal/mount/windows
     • Darwin:  stub                     internal/mount/darwin
@@ -29,11 +29,11 @@ Cache IPC wire format: [`spch.md`](spch.md).
         │
         ▼
 [Object storage / local file]
-  S3 via embedded origin in space-mount --bucket
-  (or cmd/space-origin for debug)
+  S3 via embedded origin in infinity-storage-mount --bucket
+  (or cmd/infinity-storage-origin for debug)
 ```
 
-**Source of truth for bytes = remote object store** (local `--dir` / `--file` are harnesses).  
+**Source of truth for bytes = remote object store** (local `--dir` / `--file` are harnesses).
 **Logical file size** (getattr) = object size. **Size on disk** for the virtual inode stays ~0; scrubbing fills a bounded RAM cache, not a full local copy.
 
 ---
@@ -41,9 +41,13 @@ Cache IPC wire format: [`spch.md`](spch.md).
 ## Repo layout
 
 ```text
+desktop/                Electron email/password + mount shell
+api/                    Better Auth HTTP service; owns secrets and DB access
+supabase/migrations/    Private Better Auth schema
+
 cmd/
-  space-mount/          CLI → mount.Run (all OSes)
-  space-origin/         Optional standalone S3 Range HTTP origin
+  infinity-storage-mount/          CLI → mount.Run (all OSes)
+  infinity-storage-origin/         Optional standalone S3 Range HTTP origin
 
 internal/
   mount/
@@ -55,7 +59,7 @@ internal/
     linux/              FUSE FS + fusermount3 cleanup
     windows/            cgofuse / WinFsp FS
     darwin/             stub
-  spacecatalog/         Flat name → Entry (≤256 files)
+  catalog/         Flat name → Entry (≤256 files)
   s3origin/             ListFlat + Range GET store/handler
   proxypool/            Spawn/reuse stream_proxy (UDS or TCP)
   cacheclient/          SPCH client (unix or tcp)
@@ -80,7 +84,7 @@ stream_proxy/           Zig data plane
 | Concern | Linux | Windows | macOS |
 |---|---|---|---|
 | Volume API | FUSE3 + go-fuse | WinFsp + cgofuse | Not implemented |
-| Mount point | Directory (`/tmp/space`) | Drive letter (`Z:`) | — |
+| Mount point | Directory (`/tmp/infinity-storage`) | Drive letter (`Z:`) | — |
 | SPCH transport | `--uds /path.sock` | `--listen-tcp 127.0.0.1:PORT` | — |
 | Unmount | Ctrl-C / `fusermount3 -u` | Ctrl-C / eject | — |
 | Prerequisite | `fuse3` | WinFsp installed | — |
@@ -93,15 +97,38 @@ Portable Go packages must not import FUSE or WinFsp. Only `internal/mount/{linux
 
 ## Read path (multi-file S3)
 
-1. `space-mount --bucket B` loads AWS config, `ListObjectsV2` (flat, `Delimiter=/`).
+1. `infinity-storage-mount --bucket B` loads AWS config, `ListObjectsV2` (flat, `Delimiter=/`).
 2. Embeds `s3origin` HTTP server on `127.0.0.1:0`.
-3. Builds `spacecatalog.Entry` list with `OriginURL = http://127.0.0.1:PORT/object/<name>`.
+3. Builds `catalog.Entry` list with `OriginURL = http://127.0.0.1:PORT/object/<name>`.
 4. Volume backend exposes names; on **Open**, `proxypool.Acquire` starts (or reuses) one `stream_proxy` per object:
    - `--origin-url … --name … --no-http` plus `--uds` or `--listen-tcp`.
 5. **Read** → SPCH READ → Zig cache → on miss, HTTP Range to embedded origin → S3 `GetObject(Range=…)`.
 6. Catalog refresh ~2s / on lookup (min 1s); listing is still ListObjects today (moves to meta hub in F).
 
-Caps: 256 files, 4 active proxies, 16 inflight SPCH RPCs per client, Zig `MAX_CONNECTIONS=32`, 1 MiB×512 cache, 8 MiB max range.
+Caps: 256 files, 4 active proxies, 16 inflight SPCH RPCs per client, Zig
+`MAX_CONNECTIONS=32`, 1 MiB × 512 cache, 8 MiB max range.
+
+## Planned live write path (E → F)
+
+1. FUSE or WinFsp reserves a flat pathname before accepting bytes.
+2. Go writes accepted bytes to a bounded local ingest spool.
+3. The first bytes publish a `streaming` catalog entry and writer source generation.
+4. Go uploads fixed multipart parts to S3 in the background.
+5. Observer range reads route through an authenticated relay to the writer's available spool ranges.
+6. Requests for unwritten ranges wait within a deadline; they never return fabricated zeros.
+7. Close seals local ingest while background S3 completion continues.
+8. Verified S3 completion atomically routes new ranges to object storage.
+9. The writer retains its spool for a handoff grace period, then deletes it.
+
+The API relay carries bounded requested ranges over outbound client connections, allowing devices
+behind NAT to communicate. It does not persist another full object. A direct authenticated LAN path
+may optimize the same source contract later.
+
+Zig remains the observer read cache. Go owns the ingest spool, live origin, multipart upload,
+backpressure, source handoff, and abort. S3 durability controls long-term authority but never gates
+initial cross-device visibility or preview.
+
+Full state machine and gates: [`write-sync-edit-plan.md`](write-sync-edit-plan.md).
 
 ---
 
@@ -110,7 +137,7 @@ Caps: 256 files, 4 active proxies, 16 inflight SPCH RPCs per client, Zig `MAX_CO
 | Package | Owns | Does not own |
 |---|---|---|
 | `mount` | OS volume attach, Prepare() | Byte cache |
-| `spacecatalog` | Name/size/origin URL map | S3 API |
+| `catalog` | Name/size/origin URL map | S3 API |
 | `s3origin` | List + Range HTTP to S3 | FUSE |
 | `proxypool` | Child process lifecycle | Protocol framing |
 | `cacheclient` | SPCH dial + round-trip | Spawning Zig |
@@ -118,13 +145,20 @@ Caps: 256 files, 4 active proxies, 16 inflight SPCH RPCs per client, Zig `MAX_CO
 
 ---
 
+## Control plane
+
+Electron sends email/password operations through a narrow main-process IPC bridge. The main process
+calls `infinity-storage-api`; auth cookies and database credentials never enter the renderer.
+Better Auth owns users, credential accounts, sessions, verification, reset tokens, and rate limits
+inside the private `infinity_storage_auth` schema on Supabase Postgres.
+
 ## Critical path (after multi-file)
 
-1. **Windows RO mount** — done (this doc + space-mount Windows section).
-2. **Native app** — language TBD; wraps `mount.Run`, no terminal for users.
-3. **F** — Supabase Auth + Postgres catalog; Linux + Windows share one Space.
-4. **E** — writes / background upload registering into meta.
-5. **D** — NLE edit from the mount.
+1. **Windows RO mount** — done.
+2. **Native app + email/password auth** — scaffolded; database migration pending.
+3. **E writes** — bounded sequential multipart upload on Linux and Windows.
+4. **F shared library** — account-owned catalog and bidirectional cross-device visibility.
+5. **D edit** — NLE-specific random-write, rename, replacement, and lease behavior.
 
 ---
 
@@ -138,10 +172,10 @@ cd stream_proxy && zig build
 cd stream_proxy && zig build -Dtarget=x86_64-windows-gnu
 
 # Go mount (Linux)
-go build -o space-mount ./cmd/space-mount
+go build -o infinity-storage-mount ./cmd/infinity-storage-mount
 
 # Go mount (Windows binary from Linux)
-CGO_ENABLED=0 GOOS=windows go build -o space-mount.exe ./cmd/space-mount
+CGO_ENABLED=0 GOOS=windows go build -o infinity-storage-mount.exe ./cmd/infinity-storage-mount
 ```
 
 Tests: `go test ./...` (Linux). Windows FS unit tests compile with `GOOS=windows go test -c ./internal/mount/windows`. TCP SPCH: `proxypool.TestAcquireOverTCP`.

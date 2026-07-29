@@ -1,6 +1,6 @@
 //go:build linux
 
-// Package linux is the Linux FUSE volume backend for Space.
+// Package linux is the Linux FUSE volume backend for Infinity Storage.
 package linux
 
 import (
@@ -10,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/amaan/video-storage-engine/internal/cacheclient"
-	"github.com/amaan/video-storage-engine/internal/proxypool"
-	"github.com/amaan/video-storage-engine/internal/s3origin"
-	"github.com/amaan/video-storage-engine/internal/spacecatalog"
+	"github.com/amaan/infinity-storage/internal/cacheclient"
+	"github.com/amaan/infinity-storage/internal/catalog"
+	"github.com/amaan/infinity-storage/internal/proxypool"
+	"github.com/amaan/infinity-storage/internal/s3origin"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
@@ -23,8 +23,8 @@ type ByteSource interface {
 	ReadAt(dest []byte, offset uint64) (int, error)
 }
 
-// CatalogLoader re-lists Space entries (S3). Nil means static catalog (--dir).
-type CatalogLoader func(ctx context.Context) ([]spacecatalog.Entry, error)
+// CatalogLoader re-lists Infinity Storage entries (S3). Nil means static catalog (--dir).
+type CatalogLoader func(ctx context.Context) ([]catalog.Entry, error)
 
 // RootSingle is the mount root containing one read-only file (--uds mode).
 type RootSingle struct {
@@ -34,7 +34,7 @@ type RootSingle struct {
 	size     uint64
 }
 
-// NewRootSingle builds a single-file Space root.
+// NewRootSingle builds a single-file Infinity Storage root.
 func NewRootSingle(client *cacheclient.Client, fileName string, size uint64) *RootSingle {
 	return &RootSingle{client: client, fileName: fileName, size: size}
 }
@@ -84,13 +84,13 @@ var _ = (fs.NodeGetattrer)((*singleFile)(nil))
 var _ = (fs.NodeOpener)((*singleFile)(nil))
 var _ = (fs.NodeReader)((*singleFile)(nil))
 
-// RootMulti is a flat multi-file Space root.
+// RootMulti is a flat multi-file Infinity Storage root.
 type RootMulti struct {
 	fs.Inode
 	pool *proxypool.Pool
 
 	mu          sync.Mutex
-	entries     map[string]spacecatalog.Entry
+	entries     map[string]catalog.Entry
 	load        CatalogLoader
 	lastRefresh time.Time
 	nextIno     uint64
@@ -99,17 +99,17 @@ type RootMulti struct {
 }
 
 // NewRootMulti builds a static multi-file root (--dir harness).
-func NewRootMulti(entries []spacecatalog.Entry, pool *proxypool.Pool) *RootMulti {
+func NewRootMulti(entries []catalog.Entry, pool *proxypool.Pool) *RootMulti {
 	return newRootMulti(entries, pool, nil)
 }
 
 // NewRootMultiLive builds a root that re-lists via load (S3).
-func NewRootMultiLive(entries []spacecatalog.Entry, pool *proxypool.Pool, load CatalogLoader) *RootMulti {
+func NewRootMultiLive(entries []catalog.Entry, pool *proxypool.Pool, load CatalogLoader) *RootMulti {
 	return newRootMulti(entries, pool, load)
 }
 
-func newRootMulti(entries []spacecatalog.Entry, pool *proxypool.Pool, load CatalogLoader) *RootMulti {
-	m := make(map[string]spacecatalog.Entry, len(entries))
+func newRootMulti(entries []catalog.Entry, pool *proxypool.Pool, load CatalogLoader) *RootMulti {
+	m := make(map[string]catalog.Entry, len(entries))
 	for _, e := range entries {
 		m[e.Name] = e
 	}
@@ -142,7 +142,7 @@ func (r *RootMulti) OnAdd(ctx context.Context) {
 	}
 }
 
-func (r *RootMulti) addChildLocked(ctx context.Context, e spacecatalog.Entry) {
+func (r *RootMulti) addChildLocked(ctx context.Context, e catalog.Entry) {
 	ino := r.nextIno
 	r.nextIno++
 	ch := r.NewPersistentInode(ctx, &multiFile{
@@ -222,7 +222,7 @@ func (r *RootMulti) refresh(ctx context.Context) {
 	defer r.mu.Unlock()
 	r.lastRefresh = time.Now()
 
-	wanted := make(map[string]spacecatalog.Entry, len(entries))
+	wanted := make(map[string]catalog.Entry, len(entries))
 	for _, e := range entries {
 		wanted[e.Name] = e
 	}
@@ -252,7 +252,7 @@ var _ = (fs.NodeReaddirer)((*RootMulti)(nil))
 
 type multiFile struct {
 	fs.Inode
-	entry spacecatalog.Entry
+	entry catalog.Entry
 	pool  *proxypool.Pool
 }
 

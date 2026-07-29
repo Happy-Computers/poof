@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/amaan/video-storage-engine/internal/spacecatalog"
+	"github.com/amaan/infinity-storage/internal/catalog"
 )
 
 func findProxyBin(t *testing.T) string {
@@ -47,7 +47,7 @@ func TestAcquireSharesProcess(t *testing.T) {
 	if err := os.WriteFile(path, []byte("hello-world"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	entry := spacecatalog.Entry{Name: "a.bin", AbsPath: path, Size: 11}
+	entry := catalog.Entry{Name: "a.bin", AbsPath: path, Size: 11}
 
 	pool, err := New(Config{ProxyBin: bin, MaxActive: 2})
 	if err != nil {
@@ -84,14 +84,14 @@ func TestAcquireSharesProcess(t *testing.T) {
 func TestBusyWhenNoIdle(t *testing.T) {
 	bin := findProxyBin(t)
 	dir := t.TempDir()
-	var entries []spacecatalog.Entry
+	var entries []catalog.Entry
 	for i, name := range []string{"a.bin", "b.bin"} {
 		path := filepath.Join(dir, name)
 		data := []byte{byte('a' + i)}
 		if err := os.WriteFile(path, data, 0644); err != nil {
 			t.Fatal(err)
 		}
-		entries = append(entries, spacecatalog.Entry{Name: name, AbsPath: path, Size: 1})
+		entries = append(entries, catalog.Entry{Name: name, AbsPath: path, Size: 1})
 	}
 
 	pool, err := New(Config{ProxyBin: bin, MaxActive: 1})
@@ -115,14 +115,14 @@ func TestBusyWhenNoIdle(t *testing.T) {
 func TestEvictIdle(t *testing.T) {
 	bin := findProxyBin(t)
 	dir := t.TempDir()
-	var entries []spacecatalog.Entry
+	var entries []catalog.Entry
 	for i, name := range []string{"a.bin", "b.bin"} {
 		path := filepath.Join(dir, name)
 		data := []byte{byte('a' + i)}
 		if err := os.WriteFile(path, data, 0644); err != nil {
 			t.Fatal(err)
 		}
-		entries = append(entries, spacecatalog.Entry{Name: name, AbsPath: path, Size: 1})
+		entries = append(entries, catalog.Entry{Name: name, AbsPath: path, Size: 1})
 	}
 
 	pool, err := New(Config{ProxyBin: bin, MaxActive: 1})
@@ -159,7 +159,7 @@ func TestReadBytes(t *testing.T) {
 	if err := os.WriteFile(path, payload, 0644); err != nil {
 		t.Fatal(err)
 	}
-	entry := spacecatalog.Entry{Name: "x.bin", AbsPath: path, Size: uint64(len(payload))}
+	entry := catalog.Entry{Name: "x.bin", AbsPath: path, Size: uint64(len(payload))}
 
 	pool, err := New(Config{ProxyBin: bin})
 	if err != nil {
@@ -198,7 +198,7 @@ func TestAcquireOverTCP(t *testing.T) {
 	if err := os.WriteFile(path, payload, 0644); err != nil {
 		t.Fatal(err)
 	}
-	entry := spacecatalog.Entry{Name: "t.bin", AbsPath: path, Size: uint64(len(payload))}
+	entry := catalog.Entry{Name: "t.bin", AbsPath: path, Size: uint64(len(payload))}
 	useTCP := true
 	pool, err := New(Config{ProxyBin: bin, UseTCP: &useTCP})
 	if err != nil {

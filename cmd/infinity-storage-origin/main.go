@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/amaan/video-storage-engine/internal/awsutil"
-	"github.com/amaan/video-storage-engine/internal/s3origin"
+	"github.com/amaan/infinity-storage/internal/awsutil"
+	"github.com/amaan/infinity-storage/internal/s3origin"
 	smithy "github.com/aws/smithy-go"
 )
 
@@ -34,13 +34,13 @@ func main() {
 		os.Exit(2)
 	}
 	if *key != "" && *listAll {
-		fmt.Fprintf(os.Stderr, "space-origin: --key and --list are mutually exclusive\n")
+		fmt.Fprintf(os.Stderr, "infinity-storage-origin: --key and --list are mutually exclusive\n")
 		usage()
 		os.Exit(2)
 	}
 	if *key == "" && !*listAll {
 		// Default: require --key for backward compat, or --list for multi.
-		fmt.Fprintf(os.Stderr, "space-origin: provide --key KEY or --list\n")
+		fmt.Fprintf(os.Stderr, "infinity-storage-origin: provide --key KEY or --list\n")
 		usage()
 		os.Exit(2)
 	}
@@ -87,10 +87,10 @@ func main() {
 	}
 
 	if m, ok := store.Single(); ok {
-		log.Printf("space-origin listening on http://%s/object (s3://%s/%s, %d bytes, region=%s)",
+		log.Printf("infinity-storage-origin listening on http://%s/object (s3://%s/%s, %d bytes, region=%s)",
 			*listen, *bucket, m.Key, m.Size, cfg.Region)
 	} else {
-		log.Printf("space-origin listening on http://%s/object/<name> (%d objects in s3://%s/%s, region=%s)",
+		log.Printf("infinity-storage-origin listening on http://%s/object/<name> (%d objects in s3://%s/%s, region=%s)",
 			*listen, store.Len(), *bucket, *prefix, cfg.Region)
 	}
 
@@ -109,8 +109,8 @@ func main() {
 
 func usage() {
 	fmt.Fprintf(os.Stderr, "usage:\n")
-	fmt.Fprintf(os.Stderr, "  space-origin --bucket B --key KEY [--listen ADDR] ...\n")
-	fmt.Fprintf(os.Stderr, "  space-origin --bucket B --list [--prefix P] [--listen ADDR] ...\n")
+	fmt.Fprintf(os.Stderr, "  infinity-storage-origin --bucket B --key KEY [--listen ADDR] ...\n")
+	fmt.Fprintf(os.Stderr, "  infinity-storage-origin --bucket B --list [--prefix P] [--listen ADDR] ...\n")
 }
 
 func clarifyS3Err(err error) error {

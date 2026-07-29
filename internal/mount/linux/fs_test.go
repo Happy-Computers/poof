@@ -6,11 +6,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/amaan/video-storage-engine/internal/spacecatalog"
+	"github.com/amaan/infinity-storage/internal/catalog"
 )
 
 func TestNewRootMultiWiring(t *testing.T) {
-	entries := []spacecatalog.Entry{
+	entries := []catalog.Entry{
 		{Name: "a.mp4", AbsPath: "/tmp/a.mp4", Size: 100},
 		{Name: "b.bin", AbsPath: "/tmp/b.bin", Size: 200},
 	}
@@ -38,8 +38,8 @@ func TestNewRootSingle(t *testing.T) {
 }
 
 func TestNewRootMultiLive(t *testing.T) {
-	root := NewRootMultiLive(nil, nil, func(ctx context.Context) ([]spacecatalog.Entry, error) {
-		return []spacecatalog.Entry{{Name: "x", Size: 1}}, nil
+	root := NewRootMultiLive(nil, nil, func(ctx context.Context) ([]catalog.Entry, error) {
+		return []catalog.Entry{{Name: "x", Size: 1}}, nil
 	})
 	if root.load == nil {
 		t.Fatal("expected loader")

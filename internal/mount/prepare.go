@@ -9,19 +9,19 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/amaan/video-storage-engine/internal/awsutil"
-	"github.com/amaan/video-storage-engine/internal/cacheclient"
-	"github.com/amaan/video-storage-engine/internal/proxypool"
-	"github.com/amaan/video-storage-engine/internal/s3origin"
-	"github.com/amaan/video-storage-engine/internal/spacecatalog"
+	"github.com/amaan/infinity-storage/internal/awsutil"
+	"github.com/amaan/infinity-storage/internal/cacheclient"
+	"github.com/amaan/infinity-storage/internal/catalog"
+	"github.com/amaan/infinity-storage/internal/proxypool"
+	"github.com/amaan/infinity-storage/internal/s3origin"
 )
 
-// CatalogLoader re-lists Space entries. Nil means static catalog.
-type CatalogLoader func(ctx context.Context) ([]spacecatalog.Entry, error)
+// CatalogLoader re-lists Infinity Storage entries. Nil means static catalog.
+type CatalogLoader func(ctx context.Context) ([]catalog.Entry, error)
 
 // Prepared is a ready catalog + byte pipeline for a volume backend.
 type Prepared struct {
-	Entries []spacecatalog.Entry
+	Entries []catalog.Entry
 	Pool    *proxypool.Pool
 	Load    CatalogLoader
 	Cleanup func()
@@ -93,14 +93,14 @@ func prepareBucket(cfg Config, proxyBin string) (*Prepared, error) {
 
 	originBase := "http://" + ln.Addr().String()
 	metas := store.Objects()
-	entries := make([]spacecatalog.Entry, 0, len(metas))
+	entries := make([]catalog.Entry, 0, len(metas))
 	for _, m := range metas {
-		entries = append(entries, spacecatalog.Entry{
+		entries = append(entries, catalog.Entry{
 			Name: m.Name,
 			Size: m.Size,
 		})
 	}
-	entries = spacecatalog.WithOriginBase(entries, originBase)
+	entries = catalog.WithOriginBase(entries, originBase)
 
 	pool, err := proxypool.New(proxypool.Config{ProxyBin: proxyBin})
 	if err != nil {
@@ -109,16 +109,16 @@ func prepareBucket(cfg Config, proxyBin string) (*Prepared, error) {
 		return nil, fmt.Errorf("proxypool: %w", err)
 	}
 
-	load := func(ctx context.Context) ([]spacecatalog.Entry, error) {
+	load := func(ctx context.Context) ([]catalog.Entry, error) {
 		if err := store.Refresh(ctx); err != nil {
 			return nil, err
 		}
 		metas := store.Objects()
-		ents := make([]spacecatalog.Entry, 0, len(metas))
+		ents := make([]catalog.Entry, 0, len(metas))
 		for _, m := range metas {
-			ents = append(ents, spacecatalog.Entry{Name: m.Name, Size: m.Size})
+			ents = append(ents, catalog.Entry{Name: m.Name, Size: m.Size})
 		}
-		return spacecatalog.WithOriginBase(ents, originBase), nil
+		return catalog.WithOriginBase(ents, originBase), nil
 	}
 
 	cleanup := func() {
@@ -140,7 +140,7 @@ func prepareBucket(cfg Config, proxyBin string) (*Prepared, error) {
 }
 
 func prepareDir(cfg Config, proxyBin string) (*Prepared, error) {
-	entries, err := spacecatalog.LoadDir(cfg.Dir)
+	entries, err := catalog.LoadDir(cfg.Dir)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}

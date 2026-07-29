@@ -1,4 +1,4 @@
-# space-mount — read-only Space
+# infinity-storage-mount — read-only Infinity Storage
 
 Go volume client. Apps see a normal folder/drive; reads stream through the Zig block cache.
 
@@ -7,19 +7,19 @@ Related: [`architecture.md`](architecture.md) · [`spch.md`](spch.md) · [`s3-or
 ## Layout
 
 ```text
-cmd/space-mount          CLI flags → mount.Run
+cmd/infinity-storage-mount          CLI flags → mount.Run
 internal/mount           portable Config + Prepare + Run entry
   linux/                 FUSE volume backend (go-fuse, fusermount3)
   windows/               WinFsp via cgofuse (SPCH over TCP)
   darwin/                stub (macFUSE / FSKit later)
-internal/{spacecatalog,s3origin,proxypool,cacheclient,awsutil}  shared
+internal/{catalog,s3origin,proxypool,cacheclient,awsutil}  shared
 stream_proxy             Zig byte cache (UDS on Linux, --listen-tcp on Windows)
 ```
 
 **Product proof:** objects already in the cloud bucket appear under the mount and are previewable via ranged reads — no full download first. `aws s3 cp` is a **dev/test harness only**, not product ingest.
 
 ```text
-Apps → space-mount --bucket
+Apps → infinity-storage-mount --bucket
          ├─ ListObjectsV2 (flat, Delimiter=/)
          ├─ embedded multi-key origin (Range GET)
          └─ ProxyPool → stream_proxy --origin-url
@@ -47,19 +47,19 @@ cd stream_proxy && zig build && cd ..
 # Dev harness only:
 # aws s3 cp data/screencast.mp4 s3://YOUR_BUCKET/
 
-mkdir -p /tmp/space
-go run ./cmd/space-mount \
-  --mount /tmp/space \
+mkdir -p /tmp/infinity-storage
+go run ./cmd/infinity-storage-mount \
+  --mount /tmp/infinity-storage \
   --bucket YOUR_BUCKET \
   --proxy-bin ./stream_proxy/zig-out/bin/stream_proxy
 
-ls /tmp/space
-vlc --avcodec-hw=none /tmp/space/screencast.mp4
+ls /tmp/infinity-storage
+vlc --avcodec-hw=none /tmp/infinity-storage/screencast.mp4
 ```
 
-Unmount: `Ctrl-C`, or `fusermount3 -u /tmp/space`.
+Unmount: `Ctrl-C`, or `fusermount3 -u /tmp/infinity-storage`.
 
-Flat bucket root only (`Delimiter=/`). Caps: `MaxSpaceFiles=256`, `MaxActiveProxies=4`.
+Flat bucket root only (`Delimiter=/`). Caps: `MaxFiles=256`, `MaxActiveProxies=4`.
 
 Catalog refreshes live (~2s / on `ls`, min 1s between ListObjects).
 
@@ -68,7 +68,7 @@ Optional: `--prefix`, `--region`, `--profile`, `--endpoint`, `--env-file`.
 ### Local harness (`--dir`)
 
 ```bash
-go run ./cmd/space-mount --mount /tmp/space --dir ./data \
+go run ./cmd/infinity-storage-mount --mount /tmp/infinity-storage --dir ./data \
   --proxy-bin ./stream_proxy/zig-out/bin/stream_proxy
 ```
 
@@ -76,13 +76,13 @@ go run ./cmd/space-mount --mount /tmp/space --dir ./data \
 
 ```bash
 # terminal 1
-go run ./cmd/space-origin --bucket B --key screencast.mp4 --listen 127.0.0.1:9090
+go run ./cmd/infinity-storage-origin --bucket B --key screencast.mp4 --listen 127.0.0.1:9090
 # terminal 2
 ./stream_proxy/zig-out/bin/stream_proxy \
   --origin-url http://127.0.0.1:9090/object \
-  --name screencast.mp4 --uds /tmp/space-cache.sock --no-http
+  --name screencast.mp4 --uds /tmp/infinity-storage-cache.sock --no-http
 # terminal 3
-go run ./cmd/space-mount --mount /tmp/space --uds /tmp/space-cache.sock
+go run ./cmd/infinity-storage-mount --mount /tmp/infinity-storage --uds /tmp/infinity-storage-cache.sock
 ```
 
 ---
@@ -105,13 +105,13 @@ zig build -Dtarget=x86_64-windows-gnu
 # → zig-out/bin/stream_proxy.exe
 
 cd ..
-go build -o space-mount.exe ./cmd/space-mount
+go build -o infinity-storage-mount.exe ./cmd/infinity-storage-mount
 ```
 
 Cross-compile mount from Linux:
 
 ```bash
-CGO_ENABLED=0 GOOS=windows go build -o space-mount.exe ./cmd/space-mount
+CGO_ENABLED=0 GOOS=windows go build -o infinity-storage-mount.exe ./cmd/infinity-storage-mount
 ```
 
 (`cgofuse` uses the WinFsp DLL at runtime via nocgo; WinFsp must be installed on the Windows machine.)
@@ -119,13 +119,13 @@ CGO_ENABLED=0 GOOS=windows go build -o space-mount.exe ./cmd/space-mount
 ### S3 multi-file demo checklist
 
 1. Install WinFsp; reboot if the installer asks.
-2. Place `space-mount.exe` and `stream_proxy.exe` together (or pass `--proxy-bin`).
+2. Place `infinity-storage-mount.exe` and `stream_proxy.exe` together (or pass `--proxy-bin`).
 3. Ensure AWS creds work (`aws s3 ls s3://YOUR_BUCKET`).
 4. Seed test objects if needed (`aws s3 cp …`).
 5. Mount:
 
 ```powershell
-.\space-mount.exe --mount Z: --bucket YOUR_BUCKET --proxy-bin .\stream_proxy.exe
+.\infinity-storage-mount.exe --mount Z: --bucket YOUR_BUCKET --proxy-bin .\stream_proxy.exe
 ```
 
 6. In Explorer or `dir Z:\`, confirm object names.
@@ -136,11 +136,11 @@ Single-file TCP harness:
 
 ```powershell
 # terminal 1 — origin
-go run ./cmd/space-origin --bucket B --key clip.mp4 --listen 127.0.0.1:9090
+go run ./cmd/infinity-storage-origin --bucket B --key clip.mp4 --listen 127.0.0.1:9090
 # terminal 2 — cache
 .\stream_proxy.exe --origin-url http://127.0.0.1:9090/object --name clip.mp4 --listen-tcp 127.0.0.1:9191 --no-http
 # terminal 3 — mount
-.\space-mount.exe --mount Z: --uds 127.0.0.1:9191
+.\infinity-storage-mount.exe --mount Z: --uds 127.0.0.1:9191
 ```
 
 ---
@@ -152,11 +152,13 @@ Go: 256 files, 4 active proxies, S3 8 MiB range / 4 concurrent fetches.
 
 ## Not yet (later ladder)
 
-- Native Drive app (language TBD) — Mount / Open Explorer without a terminal ([`mvp-plan.md`](mvp-plan.md))
-- Auth + Postgres metadata (Supabase) + dual-device catalog sync (F)
-- Writes into Space / background upload (E)
+- Bounded sequential multipart writes on Linux and Windows (E)
+- Account-owned Postgres catalog and cross-device visibility (F)
+- NLE random-write, rename, replacement, and lease semantics (D)
 - Nested directories
 - macOS volume backend
+
+Plan: [`write-sync-edit-plan.md`](write-sync-edit-plan.md).
 
 ## See also
 

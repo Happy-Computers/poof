@@ -12,7 +12,7 @@ pub const MAX_CONNECTIONS: u32 = 32;
 /// silently unbounded-parallelize disk reads.
 pub const MAX_CONCURRENT_ORIGIN_FILLS: u32 = 4;
 
-/// UDS protocol magic: "SPCH" (Space Cache).
+/// UDS protocol magic: "SPCH" (Infinity Storage Cache).
 pub const UDS_MAGIC: u32 = 0x53504348;
 pub const UDS_VERSION: u16 = 1;
 

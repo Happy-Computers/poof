@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/amaan/video-storage-engine/internal/spacecatalog"
+	"github.com/amaan/infinity-storage/internal/catalog"
 )
 
 // tinyRangeOrigin serves one object at /object/name with HEAD + Range GET.
@@ -61,7 +61,7 @@ func TestAcquireOriginURL(t *testing.T) {
 	bin := findProxyBin(t)
 	payload := []byte("abcdefghij0123456789")
 	base := startTinyOrigin(t, "x.bin", payload)
-	entry := spacecatalog.Entry{
+	entry := catalog.Entry{
 		Name:      "x.bin",
 		OriginURL: base + "/object/x.bin",
 		Size:      uint64(len(payload)),
@@ -94,7 +94,7 @@ func TestAcquireOriginURL(t *testing.T) {
 }
 
 func TestSlotKeyPrefersOriginURL(t *testing.T) {
-	e := spacecatalog.Entry{Name: "a", AbsPath: "/tmp/a", OriginURL: "http://x/object/a"}
+	e := catalog.Entry{Name: "a", AbsPath: "/tmp/a", OriginURL: "http://x/object/a"}
 	if e.SlotKey() != e.OriginURL {
 		t.Fatal(e.SlotKey())
 	}

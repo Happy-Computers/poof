@@ -9,11 +9,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	winfs "github.com/amaan/video-storage-engine/internal/mount/windows"
+	winfs "github.com/amaan/infinity-storage/internal/mount/windows"
 	"github.com/winfsp/cgofuse/fuse"
 )
 
-// Run attaches a Space volume via WinFsp (cgofuse).
+// Run attaches a Infinity Storage volume via WinFsp (cgofuse).
 func Run(cfg Config) error {
 	if cfg.MountPoint == "" {
 		return fmt.Errorf("mount: MountPoint required (e.g. Z:)")
@@ -30,22 +30,22 @@ func Run(cfg Config) error {
 		}
 	}()
 
-	var space *winfs.SpaceFS
+	var storage *winfs.InfinityStorageFS
 	switch {
 	case prep.SingleClient != nil:
-		space = winfs.NewSingle(prep.SingleClient, prep.SingleName, prep.SingleSize)
+		storage = winfs.NewSingle(prep.SingleClient, prep.SingleName, prep.SingleSize)
 	default:
-		space = winfs.NewMulti(prep.Entries, prep.Pool, winfs.CatalogLoader(prep.Load))
+		storage = winfs.NewMulti(prep.Entries, prep.Pool, winfs.CatalogLoader(prep.Load))
 	}
 	oldCleanup := cleanup
 	cleanup = func() {
-		space.Stop()
+		storage.Stop()
 		if oldCleanup != nil {
 			oldCleanup()
 		}
 	}
 
-	host := fuse.NewFileSystemHost(space)
+	host := fuse.NewFileSystemHost(storage)
 	if cfg.Debug {
 		host.SetCapCaseInsensitive(true)
 	}

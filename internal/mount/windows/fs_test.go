@@ -5,11 +5,11 @@ package windows
 import (
 	"testing"
 
-	"github.com/amaan/video-storage-engine/internal/spacecatalog"
+	"github.com/amaan/infinity-storage/internal/catalog"
 )
 
 func TestNewMultiWiring(t *testing.T) {
-	entries := []spacecatalog.Entry{
+	entries := []catalog.Entry{
 		{Name: "a.mp4", AbsPath: `C:\a.mp4`, Size: 100},
 		{Name: "b.bin", AbsPath: `C:\b.bin`, Size: 200},
 	}

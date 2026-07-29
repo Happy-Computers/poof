@@ -1,4 +1,4 @@
-module github.com/amaan/video-storage-engine
+module github.com/amaan/infinity-storage
 
 go 1.22.2
 

@@ -8,19 +8,19 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/amaan/video-storage-engine/internal/spacecatalog"
+	"github.com/amaan/infinity-storage/internal/catalog"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// ObjectMeta is one flat Space file backed by an S3 key.
+// ObjectMeta is one flat Infinity Storage file backed by an S3 key.
 type ObjectMeta struct {
-	Name string // basename shown in /tmp/space
+	Name string // basename shown in /tmp/infinity-storage
 	Key  string // full S3 object key
 	Size uint64
 }
 
-// Store serves ranged reads for one or more S3 objects (flat Space).
+// Store serves ranged reads for one or more S3 objects (flat Infinity Storage).
 // Catalog can be refreshed via Refresh (ListObjectsV2 again).
 type Store struct {
 	mu     sync.RWMutex
@@ -95,8 +95,8 @@ func indexMetas(metas []ObjectMeta) (map[string]ObjectMeta, []string, error) {
 		byName[m.Name] = m
 		order = append(order, m.Name)
 	}
-	if len(byName) > spacecatalog.MaxSpaceFiles {
-		return nil, nil, fmt.Errorf("too many files (>%d)", spacecatalog.MaxSpaceFiles)
+	if len(byName) > catalog.MaxFiles {
+		return nil, nil, fmt.Errorf("too many files (>%d)", catalog.MaxFiles)
 	}
 	return byName, order, nil
 }
@@ -105,8 +105,8 @@ func validateMeta(m ObjectMeta) error {
 	if m.Name == "" || m.Key == "" {
 		return fmt.Errorf("object meta missing name/key")
 	}
-	if len(m.Name) > spacecatalog.MaxNameBytes {
-		return fmt.Errorf("name too long (%d > %d): %q", len(m.Name), spacecatalog.MaxNameBytes, m.Name)
+	if len(m.Name) > catalog.MaxNameBytes {
+		return fmt.Errorf("name too long (%d > %d): %q", len(m.Name), catalog.MaxNameBytes, m.Name)
 	}
 	if strings.Contains(m.Name, "/") {
 		return fmt.Errorf("name must be basename: %q", m.Name)
@@ -161,7 +161,7 @@ func (s *Store) Len() int {
 	return len(s.byName)
 }
 
-// Lookup returns metadata for a Space basename.
+// Lookup returns metadata for a Infinity Storage basename.
 func (s *Store) Lookup(name string) (ObjectMeta, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
