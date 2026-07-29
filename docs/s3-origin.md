@@ -54,6 +54,7 @@ Then point Zig at `http://127.0.0.1:9090/object/<name>` or use `space-mount --bu
 
 ## Not yet
 
+- Shared metadata / multi-device catalog (F) — listing will move off hot-path `ListObjects`
 - Product write / upload path (E)
 - Nested keys as directories
 - Presigned-URL-only mode

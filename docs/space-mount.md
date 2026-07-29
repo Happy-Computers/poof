@@ -75,6 +75,7 @@ Go: 256 files, 4 active proxies, S3 8 MiB range / 4 concurrent fetches.
 
 ## Not yet (later ladder)
 
+- **F in progress:** shared metadata + auth + second device (see mvp-plan)
 - Writes into Space / background upload (E) — the real product ingest path
-- Second device (F)
 - Nested directories
+- Peer byte serving while uploading

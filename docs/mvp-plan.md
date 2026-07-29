@@ -101,14 +101,21 @@ Each step must be **demoable** before starting the next on the critical path. Le
 
 - **Go** `space-origin` + Zig `--origin-url`. Docs: [`docs/s3-origin.md`](s3-origin.md).
 
+#### Multi-file Space
+**Win:** `/tmp/space` looks like a **real folder** — many names, list/open any of them (still read-only). Cloud objects appear and stream for preview (no full download).
+
+- **S3 flat list** + live catalog refresh (`space-mount --bucket`). Docs: [`space-mount.md`](space-mount.md), [`s3-origin.md`](s3-origin.md).
+- Local `--dir` remains a harness only. `aws s3 cp` is **test-only** seeding, not product ingest.
+- Go UDS client caps inflight RPCs under Zig `MAX_CONNECTIONS` so media players do not drop on open.
+
 ### Next (critical path)
 
-#### Multi-file Space
-**Win:** `/tmp/space` looks like a **real folder** — many names, list/open any of them (still read-only). Cloud objects appear immediately and stream for preview (no full download).
+#### F — Auth + shared metadata + second device
+**Win:** Two mounts with the same Space token share one catalog within ~1s; bytes still stream from S3.
 
-- **S3 flat list:** done (`space-mount --bucket` + multi-key origin + proxy `--origin-url`). Docs: [`space-mount.md`](space-mount.md), [`s3-origin.md`](s3-origin.md).
-- Local `--dir` remains a harness only.
-- Seeding the bucket with `aws s3 cp` is **test-only**, not product ingest.
+- **Go** `space-meta`: SQLite catalog + bearer token auth.
+- Mount `--meta` + `--token` (listing no longer polls `ListObjects` on the hot path).
+- Still keep sync semantics simple; no deep merge/locking. Writes not required for this demo.
 
 #### E — Export / write into Space
 **Win:** Drag or save into the Space folder; file shows up; upload finishes in background.
@@ -116,13 +123,7 @@ Each step must be **demoable** before starting the next on the critical path. Le
 - **Go** write-back orchestration → multipart/object upload (cache caps still apply).
 - Crash/partial-upload behavior defined and bounded.
 - Cloud remains source of truth once durable.
-- This is the real product ingest path (users never “upload to S3” directly).
-
-#### F — Second device, same Space
-**Win:** Another machine mounts the same Space and sees the files.
-
-- **Go** shared metadata + auth.
-- Still keep sync semantics simple; no deep merge/locking product yet.
+- Real product ingest (users never upload to S3 directly). After F’s metadata hub, register files on write.
 
 #### D — Edit from the mount (proxies OK)
 **Win:** Drop media into Resolve/Premiere from Space; scrub/edit works.
@@ -136,7 +137,7 @@ Each step must be **demoable** before starting the next on the critical path. Le
 **Win:** Seek/scrub on typical wifi does not feel broken.
 
 - Prefetch + cache tuning (and disk-backed cache if needed).
-- Already **somewhat works** on progressive media; tune when seeks feel bad under real S3 latency. Do not block multi-file or E on C.
+- Already **somewhat works** on progressive media; tune when seeks feel bad under real S3 latency.
 
 ---
 
@@ -146,12 +147,14 @@ Each step must be **demoable** before starting the next on the critical path. Le
 |---|---|
 | A | Done |
 | B | Done (RO mount) |
-| S3 origin (read) | Done (single object) |
-| Multi-file Space | Done (S3 `--bucket` + local `--dir` harness) |
-| E → F → D | **Next:** E (writes / bg upload), then F (2nd device), D (NLE) |
-| C | Opportunistic (scrub already usable) |
+| S3 origin (read) | Done |
+| Multi-file Space | Done (S3 live catalog) |
+| F | **Next** — auth + metadata + 2nd device |
+| E | After F (writes / bg upload) |
+| D | After E |
+| C | Opportunistic |
 
-**Next implementation slice:** **E (writes)** — move/save into `/tmp/space` starts background upload to S3; then **F (2nd device)**, **D (NLE)**.
+**Next implementation slice:** **F** — `space-meta` (SQLite + bearer token) and `space-mount --meta` so two devices share one catalog; then **E (writes)**, **D (NLE)**.
 
 ---
 
