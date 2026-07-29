@@ -5,14 +5,16 @@ Cloud is source of truth for **reads**. Apps open files in the Space mount; only
 `aws s3 cp` (or console upload) is a **dev harness** to put objects in the bucket for demos — not how users ingest media in the product.
 
 ```text
-VLC → space-mount --bucket (Go FUSE)
-         │ list + UDS to Zig proxies
+VLC / Explorer → space-mount --bucket
+         │ list + SPCH to Zig proxies (UDS Linux / TCP Windows)
          ▼
    stream_proxy (Zig cache) --origin-url
          │ miss: HTTP Range GET
          ▼
    embedded / space-origin → S3 GetObject(Range=…)
 ```
+
+System map: [`architecture.md`](architecture.md). Mount how-to: [`space-mount.md`](space-mount.md).
 
 ## Prerequisites
 
@@ -24,7 +26,7 @@ aws sts get-caller-identity
 
 ## Preferred: one-command mount
 
-See [`space-mount.md`](space-mount.md) — `space-mount --bucket` lists flat objects, embeds the multi-key origin, and pools Zig caches.
+See [`space-mount.md`](space-mount.md) — `space-mount --bucket` lists flat objects, embeds the multi-key origin, and pools Zig caches (Linux directory or Windows `Z:`).
 
 ## Standalone origin (debug)
 
@@ -54,7 +56,7 @@ Then point Zig at `http://127.0.0.1:9090/object/<name>` or use `space-mount --bu
 
 ## Not yet
 
-- Shared metadata / multi-device catalog (F) — listing will move off hot-path `ListObjects`
+- Shared metadata / multi-device catalog (F) — after native shell
 - Product write / upload path (E)
 - Nested keys as directories
 - Presigned-URL-only mode

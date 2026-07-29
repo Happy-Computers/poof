@@ -61,7 +61,7 @@ We are not limited to one language. Each layer uses what it’s best at. Polyglo
 | Layer | Language | Why |
 |---|---|---|
 | Range I/O, fixed block cache, prefetch, hard limits (step A core) | **Zig** | Systems / data plane: fixed RAM, no GC on the cache path, TigerStyle caps. Already proven in `stream_proxy`. |
-| Space client mount, S3/SDK glue, write-back orchestration, auth + shared metadata (B→F) | **Go** | Product / control plane: mature FUSE ecosystem, boring concurrency and networking, natural fit when step F becomes multi-device. Same shape as JuiceFS / rclone-class clients. Volume backends are per-OS under `internal/mount/{linux,darwin,windows}` (Linux FUSE today). |
+| Space client mount, S3/SDK glue, write-back orchestration, auth + shared metadata (B→F) | **Go** | Product / control plane: FUSE on Linux (`internal/mount/linux`), WinFsp/cgofuse on Windows (`internal/mount/windows`), boring concurrency and networking. Same shape as JuiceFS / rclone-class clients. |
 
 **Rules of thumb**
 - **Zig owns bytes in the cache.** File size never sizes the cache; limits stay explicit.
@@ -70,7 +70,7 @@ We are not limited to one language. Each layer uses what it’s best at. Polyglo
 - Do not put Python (or similar) on the mount/cache hot path. Fine for scripts and harnesses only.
 - Rust is a later option only if we need one memory-safe binary for mount+cache and GC becomes a measured problem — not the default now.
 
-**Seam:** Go mount (or client) asks the Zig data plane for ranged bytes (local process boundary / IPC / library boundary — pick the simplest that keeps locks off the network path). HTTP Range proxy remains a test harness from step A, not the end UX.
+**Seam:** Go mount asks Zig for ranged bytes over **SPCH** ([`spch.md`](spch.md)) — UDS on Linux, TCP localhost on Windows. HTTP Range proxy remains a test harness from step A, not the end UX. Map: [`architecture.md`](architecture.md).
 
 ---
 
@@ -86,15 +86,15 @@ Each step must be **demoable** before starting the next on the critical path. Le
 - Zig `stream_proxy`: Range GET, fixed RAM block cache, prefetch, metrics.
 - Origin: one local file (stand-in for object storage).
 - Proof: VLC (prefer `--avcodec-hw=none` on AMD), `/metrics` moves, bytes ≪ “whole library.”
-- Handoff: UDS binary protocol (`--uds`) + hard caps (`MAX_CONNECTIONS`, `MAX_CONCURRENT_ORIGIN_FILLS`).
+- Handoff: SPCH binary protocol (`--uds` / later `--listen-tcp`) + hard caps (`MAX_CONNECTIONS`, `MAX_CONCURRENT_ORIGIN_FILLS`). Docs: [`spch.md`](spch.md).
 
 #### B — Mount read-only
 **Win:** A real folder/drive appears; double-click opens in normal apps.
 
 - **Go** `cmd/space-mount` presents Space as a FUSE filesystem (`hanwen/go-fuse`, `FOPEN_DIRECT_IO`).
-- Read path reuses the **Zig** block cache + origin over UDS (local file first).
+- Read path reuses the **Zig** block cache + origin over SPCH/UDS (local file first).
 - Still read-only. This is when “the OS decides which bytes” becomes true.
-- Docs: [`docs/space-mount.md`](space-mount.md).
+- Docs: [`space-mount.md`](space-mount.md).
 
 #### S3 origin (read path)
 **Win:** Same mount UX; cold bytes come from object storage, not `--file`.
@@ -106,15 +106,30 @@ Each step must be **demoable** before starting the next on the critical path. Le
 
 - **S3 flat list** + live catalog refresh (`space-mount --bucket`). Docs: [`space-mount.md`](space-mount.md), [`s3-origin.md`](s3-origin.md).
 - Local `--dir` remains a harness only. `aws s3 cp` is **test-only** seeding, not product ingest.
-- Go UDS client caps inflight RPCs under Zig `MAX_CONNECTIONS` so media players do not drop on open.
+- Go UDS/TCP client caps inflight RPCs under Zig `MAX_CONNECTIONS` so media players do not drop on open.
+- Docs: [`architecture.md`](architecture.md), [`spch.md`](spch.md).
+
+#### Windows RO mount
+**Win:** Same Space UX on Windows — drive letter (e.g. `Z:`) lists cloud objects; Explorer/VLC stream ranges via WinFsp + Zig cache over TCP SPCH.
+
+- **Go** `internal/mount/windows` (cgofuse / WinFsp); shared `mount.Prepare`.
+- `stream_proxy --listen-tcp` (proxypool default on `GOOS=windows`).
+- Docs: [`space-mount.md`](space-mount.md) Windows section, [`architecture.md`](architecture.md), [`spch.md`](spch.md).
 
 ### Next (critical path)
 
-#### F — Auth + shared metadata + second device
-**Win:** Two mounts with the same Space token share one catalog within ~1s; bytes still stream from S3.
+#### Native app (language TBD)
+**Win:** User installs Space, logs in later, clicks Mount / Open Explorer — no terminal.
 
-- **Go** `space-meta`: SQLite catalog + bearer token auth.
-- Mount `--meta` + `--token` (listing no longer polls `ListObjects` on the hot path).
+- Thin shell over the same `mount.Run` agent (Linux + Windows).
+- Language chosen when UI work starts.
+
+#### F — Auth + shared metadata + second device
+**Win:** Linux + Windows mounts share one catalog within ~1s; bytes still stream from S3.
+
+- Supabase Auth + Postgres catalog (public meta API).
+- Mount polls/subscribes meta (listing no longer polls `ListObjects` on the hot path).
+- Dual-device proof: one Linux + one Windows against the same Space.
 - Still keep sync semantics simple; no deep merge/locking. Writes not required for this demo.
 
 #### E — Export / write into Space
@@ -146,30 +161,32 @@ Each step must be **demoable** before starting the next on the critical path. Le
 | Step | Status |
 |---|---|
 | A | Done |
-| B | Done (RO mount) |
+| B | Done (RO mount, Linux) |
 | S3 origin (read) | Done |
 | Multi-file Space | Done (S3 live catalog) |
-| F | **Next** — auth + metadata + 2nd device |
+| Windows RO mount | Done (WinFsp/cgofuse + TCP SPCH) |
+| Native app | **Next** (language TBD) |
+| F | After native shell — Supabase auth + Postgres catalog; Linux+Windows dual-device |
 | E | After F (writes / bg upload) |
 | D | After E |
 | C | Opportunistic |
 
-**Next implementation slice:** **F** — `space-meta` (SQLite + bearer token) and `space-mount --meta` so two devices share one catalog; then **E (writes)**, **D (NLE)**.
+**Next implementation slice:** native app shell (language TBD), then **F** (Supabase auth + Postgres catalog) and Linux+Windows dual-device test.
 
 ---
 
 ## Mental model
 
 ```text
-[Apps: VLC / NLE / Finder]
+[Apps: VLC / NLE / Explorer / Finder]
         │ normal open / read / write
         ▼
 [Space client — Go]
-  • mount (FUSE / platform)
+  • mount (FUSE Linux / WinFsp Windows)
   • metadata (names, sizes)
   • write-back orchestration (from E)
   • auth + multi-device (from F)
-        │ ranged byte requests
+        │ SPCH ranged byte requests (UDS or TCP)
         ▼
 [Data plane — Zig]
   • fixed block cache + prefetch
@@ -180,4 +197,5 @@ Each step must be **demoable** before starting the next on the critical path. Le
 ```
 
 Step A proved the Zig **read** path over HTTP.  
-Steps B+ put a Go mount in front so every app becomes a client without knowing Space exists.
+Steps B+ put a Go mount in front so every app becomes a client without knowing Space exists.  
+Windows uses the same Prepare/proxypool path with WinFsp + TCP SPCH. Full map: [`architecture.md`](architecture.md).

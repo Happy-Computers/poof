@@ -35,4 +35,8 @@ func TestMaxInflightCap(t *testing.T) {
 	if cap(c.sem) != MaxInflight {
 		t.Fatalf("sem cap %d", cap(c.sem))
 	}
+	tcp := NewTCP("127.0.0.1:1")
+	if tcp.network != "tcp" || tcp.address != "127.0.0.1:1" {
+		t.Fatalf("%+v", tcp)
+	}
 }

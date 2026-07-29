@@ -1,10 +1,11 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package mount
 
 import "fmt"
 
-// Run refuses to mount outside Linux until darwin/windows backends exist.
+// Run refuses to mount on platforms without a volume backend yet.
 func Run(cfg Config) error {
-	return fmt.Errorf("%w (need linux FUSE; darwin/windows not implemented)", ErrUnsupported)
+	_ = cfg
+	return fmt.Errorf("%w (need linux FUSE or windows WinFsp; darwin not implemented)", ErrUnsupported)
 }

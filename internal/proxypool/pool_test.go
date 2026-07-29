@@ -189,3 +189,36 @@ func TestMaxActiveHardCap(t *testing.T) {
 		t.Fatal("want hard-cap error")
 	}
 }
+
+func TestAcquireOverTCP(t *testing.T) {
+	bin := findProxyBin(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "t.bin")
+	payload := []byte("tcp-spch-ok")
+	if err := os.WriteFile(path, payload, 0644); err != nil {
+		t.Fatal(err)
+	}
+	entry := spacecatalog.Entry{Name: "t.bin", AbsPath: path, Size: uint64(len(payload))}
+	useTCP := true
+	pool, err := New(Config{ProxyBin: bin, UseTCP: &useTCP})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	client, rel, err := pool.Acquire(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rel()
+
+	sz, err := client.Size()
+	if err != nil || sz != uint64(len(payload)) {
+		t.Fatalf("size: %d %v", sz, err)
+	}
+	buf := make([]byte, len(payload))
+	n, err := client.ReadAt(buf, 0)
+	if err != nil || n != len(payload) || string(buf) != string(payload) {
+		t.Fatalf("read: n=%d buf=%q err=%v", n, buf, err)
+	}
+}

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 const path_mod = std.fs.path;
 const http = std.http;
@@ -6,7 +7,18 @@ const limits = @import("limits.zig");
 const block_cache = @import("block_cache.zig");
 const origin_mod = @import("origin.zig");
 const proxy = @import("proxy.zig");
-const uds = @import("uds.zig");
+const tcp_spch = @import("tcp_spch.zig");
+
+const uds = if (builtin.os.tag != .windows)
+    @import("uds.zig")
+else
+    struct {
+        pub fn servePath(state: *proxy.State, uds_path: []const u8) !void {
+            _ = state;
+            _ = uds_path;
+            return error.UdsUnsupportedOnWindows;
+        }
+    };
 
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
@@ -28,7 +40,6 @@ pub fn main(init: std.process.Init) !void {
 
     if (opts.file_path) |file_path| {
         const file = try openFile(io, file_path);
-        // File stays open for process lifetime (origin owns it).
         const st = try file.stat(io);
         if (st.size == 0) {
             std.log.err("origin file is empty: {s}", .{file_path});
@@ -74,13 +85,17 @@ pub fn main(init: std.process.Init) !void {
     if (opts.uds_path) |uds_path| {
         try group.concurrent(io, serveUds, .{ &state, uds_path });
     }
+    if (opts.listen_tcp) |tcp_addr| {
+        try group.concurrent(io, serveTcpSpch, .{ &state, tcp_addr });
+    }
 
+    const has_spch = opts.uds_path != null or opts.listen_tcp != null;
     if (opts.port) |port| {
         try proxy.serveAddress(&state, port);
-    } else if (opts.uds_path != null) {
+    } else if (has_spch) {
         try group.await(io);
     } else {
-        std.log.err("need --port and/or --uds", .{});
+        std.log.err("need --port and/or --uds and/or --listen-tcp", .{});
         return error.MissingListen;
     }
 }
@@ -91,12 +106,19 @@ fn serveUds(state: *proxy.State, uds_path: []const u8) void {
     };
 }
 
+fn serveTcpSpch(state: *proxy.State, addr: []const u8) void {
+    tcp_spch.serveAddr(state, addr) catch |err| {
+        std.log.err("spch-tcp serve failed: {t}", .{err});
+    };
+}
+
 const Options = struct {
     file_path: ?[]const u8,
     origin_url: ?[]const u8,
     name: ?[]const u8,
     port: ?u16,
     uds_path: ?[]const u8,
+    listen_tcp: ?[]const u8,
 };
 
 fn parseArgs(args: []const []const u8) !Options {
@@ -105,6 +127,7 @@ fn parseArgs(args: []const []const u8) !Options {
     var name: ?[]const u8 = null;
     var port: ?u16 = 8080;
     var uds_path: ?[]const u8 = null;
+    var listen_tcp: ?[]const u8 = null;
     var port_set = false;
     var no_http = false;
 
@@ -132,11 +155,15 @@ fn parseArgs(args: []const []const u8) !Options {
             i += 1;
             if (i >= args.len) return error.MissingUds;
             uds_path = args[i];
+        } else if (std.mem.eql(u8, a, "--listen-tcp")) {
+            i += 1;
+            if (i >= args.len) return error.MissingListenTcp;
+            listen_tcp = args[i];
         } else if (std.mem.eql(u8, a, "--no-http")) {
             no_http = true;
         } else if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) {
             std.log.info(
-                "usage: stream_proxy (--file PATH | --origin-url URL) [--name NAME] [--port 8080] [--uds PATH] [--no-http]",
+                "usage: stream_proxy (--file PATH | --origin-url URL) [--name NAME] [--port 8080] [--uds PATH] [--listen-tcp HOST:PORT] [--no-http]",
                 .{},
             );
             return error.Help;
@@ -154,6 +181,14 @@ fn parseArgs(args: []const []const u8) !Options {
         std.log.err("need --file PATH or --origin-url URL", .{});
         return error.MissingOrigin;
     }
+    if (uds_path != null and listen_tcp != null) {
+        std.log.err("--uds and --listen-tcp are mutually exclusive", .{});
+        return error.ConflictingArgs;
+    }
+    if (builtin.os.tag == .windows and uds_path != null) {
+        std.log.err("--uds is not supported on Windows; use --listen-tcp", .{});
+        return error.UdsUnsupportedOnWindows;
+    }
 
     if (no_http) {
         if (port_set) {
@@ -169,6 +204,7 @@ fn parseArgs(args: []const []const u8) !Options {
         .name = name,
         .port = port,
         .uds_path = uds_path,
+        .listen_tcp = listen_tcp,
     };
 }
 
@@ -191,5 +227,9 @@ test {
     _ = @import("block_cache.zig");
     _ = @import("protocol.zig");
     _ = @import("proxy.zig");
-    _ = @import("uds.zig");
+    _ = @import("spch.zig");
+    _ = @import("tcp_spch.zig");
+    if (builtin.os.tag != .windows) {
+        _ = @import("uds.zig");
+    }
 }

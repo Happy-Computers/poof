@@ -1,20 +1,22 @@
 # space-mount — read-only Space
 
-Go FUSE client (Linux). Apps see a normal folder; reads stream through the Zig block cache.
+Go volume client. Apps see a normal folder/drive; reads stream through the Zig block cache.
+
+Related: [`architecture.md`](architecture.md) · [`spch.md`](spch.md) · [`s3-origin.md`](s3-origin.md) · [`mvp-plan.md`](mvp-plan.md)
 
 ## Layout
 
 ```text
 cmd/space-mount          CLI flags → mount.Run
-internal/mount           portable Config + Run entry
+internal/mount           portable Config + Prepare + Run entry
   linux/                 FUSE volume backend (go-fuse, fusermount3)
+  windows/               WinFsp via cgofuse (SPCH over TCP)
   darwin/                stub (macFUSE / FSKit later)
-  windows/               stub (WinFsp later)
 internal/{spacecatalog,s3origin,proxypool,cacheclient,awsutil}  shared
-stream_proxy             Zig byte cache (shared data plane)
+stream_proxy             Zig byte cache (UDS on Linux, --listen-tcp on Windows)
 ```
 
-**Product proof (this slice):** objects already in the cloud bucket appear under `/tmp/space` and are previewable immediately via ranged reads — no full download first. Putting objects in the bucket with `aws s3 cp` is a **dev/test harness only**, not a product upload path.
+**Product proof:** objects already in the cloud bucket appear under the mount and are previewable via ranged reads — no full download first. `aws s3 cp` is a **dev/test harness only**, not product ingest.
 
 ```text
 Apps → space-mount --bucket
@@ -24,21 +26,26 @@ Apps → space-mount --bucket
                 └─ miss → S3 GetObject(Range=…)
 ```
 
-## Prerequisites
+On Windows, ProxyPool uses `--listen-tcp 127.0.0.1:PORT` instead of `--uds`. See [`spch.md`](spch.md).
+
+---
+
+## Linux
+
+### Prerequisites
 
 - `fuse3` (`fusermount3`)
 - Zig `stream_proxy` built (`cd stream_proxy && zig build`)
 - Go 1.22+
 - AWS credentials (same as `aws` CLI / `.env`)
 
-## S3 multi-file (cloud Space)
+### S3 multi-file
 
 ```bash
 cd stream_proxy && zig build && cd ..
 
-# Dev harness only — seed the bucket so the mount has something to list:
+# Dev harness only:
 # aws s3 cp data/screencast.mp4 s3://YOUR_BUCKET/
-# aws s3 cp data/demo.bin s3://YOUR_BUCKET/
 
 mkdir -p /tmp/space
 go run ./cmd/space-mount \
@@ -52,22 +59,20 @@ vlc --avcodec-hw=none /tmp/space/screencast.mp4
 
 Unmount: `Ctrl-C`, or `fusermount3 -u /tmp/space`.
 
-Flat bucket root only (`Delimiter=/`). Nested keys ignored. Caps: `MaxSpaceFiles=256`, `MaxActiveProxies=4`.
+Flat bucket root only (`Delimiter=/`). Caps: `MaxSpaceFiles=256`, `MaxActiveProxies=4`.
 
-Catalog **refreshes live** (every ~2s and on `ls`/lookup, min 1s between ListObjects). New objects in the bucket appear in `/tmp/space` without remounting.
+Catalog refreshes live (~2s / on `ls`, min 1s between ListObjects).
 
 Optional: `--prefix`, `--region`, `--profile`, `--endpoint`, `--env-file`.
 
-## Local harness (`--dir`)
-
-Still available for offline FUSE tests without AWS:
+### Local harness (`--dir`)
 
 ```bash
 go run ./cmd/space-mount --mount /tmp/space --dir ./data \
   --proxy-bin ./stream_proxy/zig-out/bin/stream_proxy
 ```
 
-## Single-file manual UDS
+### Single-file UDS
 
 ```bash
 # terminal 1
@@ -75,10 +80,70 @@ go run ./cmd/space-origin --bucket B --key screencast.mp4 --listen 127.0.0.1:909
 # terminal 2
 ./stream_proxy/zig-out/bin/stream_proxy \
   --origin-url http://127.0.0.1:9090/object \
-  --name screencast.mp4 --uds /tmp/space-cache.sock --port 8080
+  --name screencast.mp4 --uds /tmp/space-cache.sock --no-http
 # terminal 3
 go run ./cmd/space-mount --mount /tmp/space --uds /tmp/space-cache.sock
 ```
+
+---
+
+## Windows
+
+### Prerequisites
+
+- [WinFsp](https://github.com/winfsp/winfsp/releases) installed
+- Go 1.22+ (Windows)
+- Zig cross-build or native Windows build of `stream_proxy`
+- AWS credentials
+
+### Build
+
+```powershell
+# From repo root (on Windows), or cross-compile from Linux:
+cd stream_proxy
+zig build -Dtarget=x86_64-windows-gnu
+# → zig-out/bin/stream_proxy.exe
+
+cd ..
+go build -o space-mount.exe ./cmd/space-mount
+```
+
+Cross-compile mount from Linux:
+
+```bash
+CGO_ENABLED=0 GOOS=windows go build -o space-mount.exe ./cmd/space-mount
+```
+
+(`cgofuse` uses the WinFsp DLL at runtime via nocgo; WinFsp must be installed on the Windows machine.)
+
+### S3 multi-file demo checklist
+
+1. Install WinFsp; reboot if the installer asks.
+2. Place `space-mount.exe` and `stream_proxy.exe` together (or pass `--proxy-bin`).
+3. Ensure AWS creds work (`aws s3 ls s3://YOUR_BUCKET`).
+4. Seed test objects if needed (`aws s3 cp …`).
+5. Mount:
+
+```powershell
+.\space-mount.exe --mount Z: --bucket YOUR_BUCKET --proxy-bin .\stream_proxy.exe
+```
+
+6. In Explorer or `dir Z:\`, confirm object names.
+7. Open a progressive MP4 in VLC / Photos; scrub — no full download.
+8. `Ctrl-C` in the mount console to unmount (or eject the drive).
+
+Single-file TCP harness:
+
+```powershell
+# terminal 1 — origin
+go run ./cmd/space-origin --bucket B --key clip.mp4 --listen 127.0.0.1:9090
+# terminal 2 — cache
+.\stream_proxy.exe --origin-url http://127.0.0.1:9090/object --name clip.mp4 --listen-tcp 127.0.0.1:9191 --no-http
+# terminal 3 — mount
+.\space-mount.exe --mount Z: --uds 127.0.0.1:9191
+```
+
+---
 
 ## Limits
 
@@ -87,7 +152,15 @@ Go: 256 files, 4 active proxies, S3 8 MiB range / 4 concurrent fetches.
 
 ## Not yet (later ladder)
 
-- **F in progress:** shared metadata + auth + second device (see mvp-plan)
-- Writes into Space / background upload (E) — the real product ingest path
+- Native Drive app (language TBD) — Mount / Open Explorer without a terminal ([`mvp-plan.md`](mvp-plan.md))
+- Auth + Postgres metadata (Supabase) + dual-device catalog sync (F)
+- Writes into Space / background upload (E)
 - Nested directories
-- Peer byte serving while uploading
+- macOS volume backend
+
+## See also
+
+- [`architecture.md`](architecture.md) — full system map
+- [`spch.md`](spch.md) — Go↔Zig cache protocol
+- [`stream_proxy.md`](stream_proxy.md) — Zig data plane
+- [`s3-origin.md`](s3-origin.md) — S3 Range origin

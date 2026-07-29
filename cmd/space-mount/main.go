@@ -10,8 +10,8 @@ import (
 )
 
 func main() {
-	mountPoint := flag.String("mount", "", "mount point directory")
-	udsPath := flag.String("uds", "", "path to stream_proxy UDS (single-file mode)")
+	mountPoint := flag.String("mount", "", "mount point (Linux dir, or Windows drive letter e.g. Z:)")
+	udsPath := flag.String("uds", "", "stream_proxy SPCH endpoint: Unix socket path, or host:port for TCP")
 	originDir := flag.String("dir", "", "local origin directory (multi-file harness)")
 	bucket := flag.String("bucket", "", "S3 bucket (multi-file cloud Space)")
 	prefix := flag.String("prefix", "", "S3 key prefix for flat listing (Delimiter=/)")
@@ -20,7 +20,7 @@ func main() {
 	profile := flag.String("profile", "", "AWS shared config profile")
 	envFile := flag.String("env-file", "", "optional dotenv file (default: .env then .env.local)")
 	proxyBin := flag.String("proxy-bin", "stream_proxy", "path to stream_proxy binary (multi-file)")
-	debug := flag.Bool("debug", false, "FUSE debug logs")
+	debug := flag.Bool("debug", false, "volume debug logs")
 	flag.Parse()
 
 	if *mountPoint == "" {
@@ -64,7 +64,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintf(os.Stderr, "usage:\n")
-	fmt.Fprintf(os.Stderr, "  space-mount --mount DIR --bucket BUCKET [--prefix P] [--proxy-bin PATH]\n")
-	fmt.Fprintf(os.Stderr, "  space-mount --mount DIR --dir ORIGIN_DIR [--proxy-bin PATH]\n")
-	fmt.Fprintf(os.Stderr, "  space-mount --mount DIR --uds SOCK\n")
+	fmt.Fprintf(os.Stderr, "  space-mount --mount DIR|Z: --bucket BUCKET [--prefix P] [--proxy-bin PATH]\n")
+	fmt.Fprintf(os.Stderr, "  space-mount --mount DIR|Z: --dir ORIGIN_DIR [--proxy-bin PATH]\n")
+	fmt.Fprintf(os.Stderr, "  space-mount --mount DIR|Z: --uds SOCK|HOST:PORT\n")
 }

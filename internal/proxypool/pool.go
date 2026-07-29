@@ -4,9 +4,11 @@ package proxypool
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -27,8 +29,11 @@ var ErrBusy = errors.New("proxypool: no idle proxy slot")
 // Config for a Pool.
 type Config struct {
 	ProxyBin  string // path to stream_proxy binary
-	SockDir   string // directory for UDS sockets; created if needed
+	SockDir   string // directory for UDS sockets (Linux); unused on Windows TCP
 	MaxActive int    // default MaxActiveProxies; must be ≤ MaxActiveProxies
+	// UseTCP forces SPCH over TCP 127.0.0.1 (default: true on Windows, false elsewhere).
+	// Set explicitly in tests.
+	UseTCP *bool
 }
 
 // Pool manages at most MaxActive stream_proxy processes (one object each).
@@ -36,6 +41,7 @@ type Pool struct {
 	mu        sync.Mutex
 	bin       string
 	sockDir   string
+	useTCP    bool
 	maxActive int
 	slots     map[string]*slot // key = Entry.SlotKey()
 	seq       int
@@ -45,7 +51,7 @@ type Pool struct {
 type slot struct {
 	key      string
 	name     string
-	sock     string
+	endpoint string // UDS path or host:port
 	cmd      *exec.Cmd
 	waitDone <-chan error
 	client   *cacheclient.Client
@@ -62,15 +68,23 @@ func New(cfg Config) (*Pool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("proxypool: proxy bin %q: %w", cfg.ProxyBin, err)
 	}
+	useTCP := runtime.GOOS == "windows"
+	if cfg.UseTCP != nil {
+		useTCP = *cfg.UseTCP
+	}
+
 	sockDir := cfg.SockDir
-	if sockDir == "" {
-		sockDir, err = os.MkdirTemp("", "space-proxies-")
-		if err != nil {
+	if !useTCP {
+		if sockDir == "" {
+			sockDir, err = os.MkdirTemp("", "space-proxies-")
+			if err != nil {
+				return nil, fmt.Errorf("proxypool: sock dir: %w", err)
+			}
+		} else if err := os.MkdirAll(sockDir, 0700); err != nil {
 			return nil, fmt.Errorf("proxypool: sock dir: %w", err)
 		}
-	} else if err := os.MkdirAll(sockDir, 0700); err != nil {
-		return nil, fmt.Errorf("proxypool: sock dir: %w", err)
 	}
+
 	max := cfg.MaxActive
 	if max <= 0 {
 		max = MaxActiveProxies
@@ -81,6 +95,7 @@ func New(cfg Config) (*Pool, error) {
 	return &Pool{
 		bin:       bin,
 		sockDir:   sockDir,
+		useTCP:    useTCP,
 		maxActive: max,
 		slots:     make(map[string]*slot),
 	}, nil
@@ -155,8 +170,10 @@ func (p *Pool) Close() error {
 		}
 		delete(p.slots, key)
 	}
-	if err := os.RemoveAll(p.sockDir); err != nil && firstErr == nil {
-		firstErr = err
+	if p.sockDir != "" {
+		if err := os.RemoveAll(p.sockDir); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	return firstErr
 }
@@ -183,10 +200,27 @@ func (p *Pool) evictIdleLocked() bool {
 
 func (p *Pool) spawnLocked(entry spacecatalog.Entry, key string) (*slot, error) {
 	p.seq++
-	sock := filepath.Join(p.sockDir, fmt.Sprintf("%d.sock", p.seq))
-	_ = os.Remove(sock)
 
-	args := []string{"--name", entry.Name, "--uds", sock, "--no-http"}
+	var endpoint string
+	var args []string
+	var client *cacheclient.Client
+
+	if p.useTCP {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, fmt.Errorf("proxypool: reserve tcp port: %w", err)
+		}
+		endpoint = ln.Addr().String()
+		_ = ln.Close()
+		args = []string{"--name", entry.Name, "--listen-tcp", endpoint, "--no-http"}
+		client = cacheclient.NewTCP(endpoint)
+	} else {
+		endpoint = filepath.Join(p.sockDir, fmt.Sprintf("%d.sock", p.seq))
+		_ = os.Remove(endpoint)
+		args = []string{"--name", entry.Name, "--uds", endpoint, "--no-http"}
+		client = cacheclient.New(endpoint)
+	}
+
 	if entry.OriginURL != "" {
 		args = append([]string{"--origin-url", entry.OriginURL}, args...)
 	} else {
@@ -203,12 +237,13 @@ func (p *Pool) spawnLocked(entry spacecatalog.Entry, key string) (*slot, error) 
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
 
-	client := cacheclient.New(sock)
 	var lastErr error
 	for i := 0; i < readyAttempts; i++ {
 		select {
 		case err := <-waitDone:
-			_ = os.Remove(sock)
+			if !p.useTCP {
+				_ = os.Remove(endpoint)
+			}
 			if err == nil {
 				err = fmt.Errorf("exit 0")
 			}
@@ -220,7 +255,7 @@ func (p *Pool) spawnLocked(entry spacecatalog.Entry, key string) (*slot, error) 
 			return &slot{
 				key:      key,
 				name:     entry.Name,
-				sock:     sock,
+				endpoint: endpoint,
 				cmd:      cmd,
 				waitDone: waitDone,
 				client:   client,
@@ -231,7 +266,9 @@ func (p *Pool) spawnLocked(entry spacecatalog.Entry, key string) (*slot, error) 
 	}
 	_ = cmd.Process.Kill()
 	<-waitDone
-	_ = os.Remove(sock)
+	if !p.useTCP {
+		_ = os.Remove(endpoint)
+	}
 	return nil, fmt.Errorf("proxypool: not ready for %s: %w", entry.Name, lastErr)
 }
 
@@ -245,6 +282,8 @@ func (p *Pool) killLocked(s *slot) error {
 		case <-time.After(2 * time.Second):
 		}
 	}
-	_ = os.Remove(s.sock)
+	if !p.useTCP && s.endpoint != "" {
+		_ = os.Remove(s.endpoint)
+	}
 	return nil
 }

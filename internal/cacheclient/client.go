@@ -1,4 +1,4 @@
-// Package cacheclient talks to the Zig stream_proxy over the Space Cache UDS protocol.
+// Package cacheclient talks to the Zig stream_proxy over the SPCH binary protocol (UDS or TCP).
 package cacheclient
 
 import (
@@ -28,29 +28,42 @@ const (
 	reqSize = 24
 	hdrSize = 8
 
-	// MaxInflight caps concurrent UDS RPCs per Client.
+	// MaxInflight caps concurrent RPCs per Client.
 	// Must stay below Zig MAX_CONNECTIONS (32) — media players issue many
-	// parallel FUSE reads; one dial-per-RPC without this limit drops clients.
+	// parallel reads; one dial-per-RPC without this limit drops clients.
 	MaxInflight = 16
 )
 
-// Client is a thread-safe UDS client to stream_proxy.
+// Client is a thread-safe SPCH client to stream_proxy (unix or tcp).
 type Client struct {
-	path string
-	sem  chan struct{} // bounds concurrent dials
+	network string // "unix" or "tcp"
+	address string
+	sem     chan struct{}
 }
 
+// New dials a Unix domain socket path (Linux).
 func New(path string) *Client {
+	return NewNetwork("unix", path)
+}
+
+// NewTCP dials a TCP address like "127.0.0.1:12345" (Windows / portable).
+func NewTCP(addr string) *Client {
+	return NewNetwork("tcp", addr)
+}
+
+// NewNetwork dials network+address (e.g. "unix", path or "tcp", "127.0.0.1:9").
+func NewNetwork(network, address string) *Client {
 	return &Client{
-		path: path,
-		sem:  make(chan struct{}, MaxInflight),
+		network: network,
+		address: address,
+		sem:     make(chan struct{}, MaxInflight),
 	}
 }
 
 func (c *Client) dial() (net.Conn, error) {
-	conn, err := net.Dial("unix", c.path)
+	conn, err := net.Dial(c.network, c.address)
 	if err != nil {
-		return nil, fmt.Errorf("dial %s: %w", c.path, err)
+		return nil, fmt.Errorf("dial %s://%s: %w", c.network, c.address, err)
 	}
 	return conn, nil
 }
@@ -142,7 +155,6 @@ func (c *Client) roundTrip(op uint16, offset uint64, length uint32) ([]byte, err
 	binary.LittleEndian.PutUint16(req[6:8], op)
 	binary.LittleEndian.PutUint64(req[8:16], offset)
 	binary.LittleEndian.PutUint32(req[16:20], length)
-	// reserved [20:24] = 0
 
 	if _, err := conn.Write(req[:]); err != nil {
 		return nil, fmt.Errorf("write request: %w", err)

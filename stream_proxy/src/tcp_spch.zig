@@ -5,23 +5,16 @@ const limits = @import("limits.zig");
 const proxy = @import("proxy.zig");
 const spch = @import("spch.zig");
 
-pub fn servePath(state: *proxy.State, uds_path: []const u8) !void {
-    // Stale socket from a prior crash blocks listen.
-    Io.Dir.deleteFileAbsolute(state.io, uds_path) catch |err| switch (err) {
-        error.FileNotFound => {},
-        else => return err,
-    };
-
-    const address = try net.UnixAddress.init(uds_path);
+/// Serve SPCH over TCP at host:port (e.g. "127.0.0.1:0" for ephemeral).
+pub fn serveAddr(state: *proxy.State, addr_text: []const u8) !void {
+    const address = try net.IpAddress.parseLiteral(addr_text);
     var server = try address.listen(state.io, .{
+        .reuse_address = true,
         .kernel_backlog = limits.LISTEN_BACKLOG,
     });
-    defer {
-        server.deinit(state.io);
-        Io.Dir.deleteFileAbsolute(state.io, uds_path) catch {};
-    }
+    defer server.deinit(state.io);
 
-    std.log.info("stream_proxy uds listening on {s}", .{uds_path});
+    std.log.info("stream_proxy spch-tcp listening on {f}", .{server.socket.address});
 
     var group: Io.Group = .init;
     defer group.cancel(state.io);
@@ -30,21 +23,21 @@ pub fn servePath(state: *proxy.State, uds_path: []const u8) !void {
         const stream = server.accept(state.io) catch |err| switch (err) {
             error.Canceled => return,
             else => {
-                std.log.err("uds accept failed: {t}", .{err});
+                std.log.err("spch-tcp accept failed: {t}", .{err});
                 continue;
             },
         };
         if (!state.tryAcquireConnection()) {
             var copy = stream;
             copy.close(state.io);
-            std.log.warn("connection limit reached ({d}); dropped UDS client", .{limits.MAX_CONNECTIONS});
+            std.log.warn("connection limit reached ({d}); dropped TCP SPCH client", .{limits.MAX_CONNECTIONS});
             continue;
         }
         group.concurrent(state.io, spch.handleConnection, .{ state, stream }) catch {
             state.releaseConnection();
             var copy = stream;
             copy.close(state.io);
-            std.log.err("failed to spawn uds handler", .{});
+            std.log.err("failed to spawn spch-tcp handler", .{});
         };
     }
 }
