@@ -121,7 +121,7 @@ func (s *Server) serveLive(response http.ResponseWriter, request *http.Request, 
 		return
 	}
 	stream, ok := s.lookup(parts[0], parts[1])
-	if !ok || stream.State == "durable" || stream.State == "aborted" {
+	if !ok || (stream.State != "streaming" && stream.State != "sealing" && stream.State != "durable") {
 		http.NotFound(response, request)
 		return
 	}
