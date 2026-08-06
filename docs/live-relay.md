@@ -62,3 +62,7 @@ The relay has a global maximum of eight concurrent 8 MiB range requests and neve
 This is the demo transport before the account-owned API relay. It uses one preconfigured bearer token
 per library and keeps streaming catalog state in relay memory, so restarting the relay removes
 in-progress entries. Durable objects remain in S3 and appear through the ordinary S3 catalog.
+
+Electron forwards the relay configuration to the mount when all three environment variables are set:
+`INFINITY_STORAGE_LIVE_RELAY_URL`, `INFINITY_STORAGE_LIBRARY_ID`, and
+`INFINITY_STORAGE_RELAY_TOKEN_FILE`.

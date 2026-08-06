@@ -149,6 +149,26 @@ function resolve_mount_bin() {
     return path.join(__dirname, "..", name);
 }
 
+function resolve_live_relay() {
+    const url = process.env.INFINITY_STORAGE_LIVE_RELAY_URL ?? "";
+    const library_id = process.env.INFINITY_STORAGE_LIBRARY_ID ?? "";
+    const token_file = process.env.INFINITY_STORAGE_RELAY_TOKEN_FILE ?? "";
+    const configured = [url, library_id, token_file].filter((value) => value.length > 0).length;
+    if (configured === 0) {
+        return null;
+    }
+    assert(configured === 3, "live relay requires URL, library ID, and token file");
+    assert_string_bound(url, PATH_BYTES_MAX, "INFINITY_STORAGE_LIVE_RELAY_URL");
+    assert_string_bound(library_id, BUCKET_BYTES_MAX, "INFINITY_STORAGE_LIBRARY_ID");
+    assert_string_bound(token_file, PATH_BYTES_MAX, "INFINITY_STORAGE_RELAY_TOKEN_FILE");
+    const parsed = new URL(url);
+    assert(parsed.protocol === "http:" || parsed.protocol === "https:", "invalid live relay URL protocol");
+    assert(parsed.username.length === 0, "live relay URL must not contain credentials");
+    assert(parsed.password.length === 0, "live relay URL must not contain credentials");
+    assert(fs.existsSync(token_file), "live relay token file not found");
+    return { url, library_id, token_file };
+}
+
 function resolve_proxy_bin() {
     const env_bin = process.env.INFINITY_STORAGE_PROXY_BIN;
     if (typeof env_bin === "string" && env_bin.length > 0) {
@@ -190,6 +210,14 @@ function start_mount(options) {
         "--bucket", options.bucket,
         "--proxy-bin", proxy_bin,
     ];
+    const relay = resolve_live_relay();
+    if (relay !== null) {
+        args.push(
+            "--live-relay-url", relay.url,
+            "--library-id", relay.library_id,
+            "--relay-token-file", relay.token_file,
+        );
+    }
 
     const child = spawn(mount_bin, args, {
         stdio: ["ignore", "pipe", "pipe"],
