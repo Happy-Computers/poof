@@ -80,6 +80,7 @@ type Config struct {
 	RangeWait       time.Duration
 	UploadAttempts  int
 	Publish         func(Snapshot)
+	Logf            func(string, ...any)
 }
 
 type Snapshot struct {
@@ -101,6 +102,7 @@ type Manager struct {
 	rangeWait       time.Duration
 	uploadAttempts  int
 	publish         func(Snapshot)
+	logf            func(string, ...any)
 
 	spoolBytes   uint64
 	activeWrites int
@@ -186,6 +188,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		rangeWait:       rangeWait,
 		uploadAttempts:  uploadAttempts,
 		publish:         cfg.Publish,
+		logf:            cfg.Logf,
 		files:           make(map[string]*File),
 		uploadTokens:    make(chan struct{}, maxActiveWrites),
 	}, nil
@@ -265,6 +268,12 @@ func (m *Manager) Entries() []catalog.Entry {
 	return entries
 }
 
+func (m *Manager) log(format string, values ...any) {
+	if m.logf != nil {
+		m.logf(format, values...)
+	}
+}
+
 func (m *Manager) notify(file *File) {
 	if m.publish != nil {
 		go func() {
@@ -330,9 +339,11 @@ func (f *File) WriteAt(content []byte, offset uint64) (int, error) {
 		if f.state == StateReserved {
 			f.state = StateStreaming
 			f.started = true
+			f.manager.log("ingest state name=%s state=%s", f.name, f.state)
 			go f.runUpload()
 		}
 		f.changed.Broadcast()
+		f.manager.log("ingest write name=%s offset=%d bytes=%d accepted=%d", f.name, offset, n, f.accepted)
 		f.manager.notify(f)
 	}
 	if n < len(content) {
@@ -402,6 +413,7 @@ func (f *File) Close() error {
 	} else if f.state == StateStreaming {
 		f.state = StateSealing
 	}
+	f.manager.log("ingest state name=%s state=%s accepted=%d", f.name, f.state, f.accepted)
 	f.changed.Broadcast()
 	f.manager.notify(f)
 	return nil
@@ -532,7 +544,9 @@ func (f *File) Abort(ctx context.Context) error {
 }
 
 func (f *File) runUpload() {
+	f.manager.log("ingest upload queued name=%s", f.name)
 	f.manager.uploadTokens <- struct{}{}
+	f.manager.log("ingest upload started name=%s", f.name)
 	defer func() { <-f.manager.uploadTokens }()
 	f.mu.Lock()
 	aborted := f.state == StateAborting || f.state == StateAborted
@@ -582,6 +596,7 @@ func (f *File) runUpload() {
 		}
 		parts = append(parts, part)
 		offset += uint64(count)
+		f.manager.log("ingest upload part name=%s number=%d bytes=%d uploaded=%d", f.name, number, count, offset)
 		f.mu.Lock()
 		f.uploaded = offset
 		f.changed.Broadcast()
@@ -602,6 +617,7 @@ func (f *File) runUpload() {
 	}
 	f.mu.Lock()
 	f.state = StateDurable
+	f.manager.log("ingest state name=%s state=%s size=%d", f.name, f.state, size)
 	f.changed.Broadcast()
 	f.manager.notify(f)
 	f.mu.Unlock()
@@ -644,6 +660,7 @@ func (f *File) setUploadError(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.uploadErr = err
+	f.manager.log("ingest upload error name=%s error=%v", f.name, err)
 	f.changed.Broadcast()
 	f.manager.notify(f)
 }

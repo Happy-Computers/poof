@@ -18,6 +18,8 @@ func Run(cfg Config) error {
 	if cfg.MountPoint == "" {
 		return fmt.Errorf("mount: MountPoint required (e.g. Z:)")
 	}
+	stopMetrics := startMetrics(cfg.MetricsInterval)
+	defer stopMetrics()
 
 	prep, err := Prepare(cfg)
 	if err != nil {

@@ -167,6 +167,11 @@ func prepareBucket(cfg Config, proxyBin string) (*Prepared, error) {
 				log.Printf("live relay publish %s: %v", snapshot.Name, err)
 			}
 		},
+		Logf: func(format string, values ...any) {
+			if cfg.Debug {
+				log.Printf(format, values...)
+			}
+		},
 	})
 	if err != nil {
 		_ = httpServer.Close()

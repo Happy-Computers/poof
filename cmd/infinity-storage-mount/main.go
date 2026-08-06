@@ -25,7 +25,8 @@ func main() {
 	liveRelayURL := flag.String("live-relay-url", "", "authenticated live relay URL (--bucket mode)")
 	libraryID := flag.String("library-id", "", "live relay library ID (--bucket mode)")
 	relayTokenFile := flag.String("relay-token-file", "", "file containing the live relay bearer token (--bucket mode)")
-	debug := flag.Bool("debug", false, "volume debug logs")
+	debug := flag.Bool("debug", false, "lifecycle and filesystem debug logs")
+	metricsLogInterval := flag.Duration("metrics-log-interval", 0, "runtime metrics log interval, for example 1s (0 disables)")
 	flag.Parse()
 
 	if *mountPoint == "" {
@@ -58,21 +59,22 @@ func main() {
 	}
 
 	err := mount.Run(mount.Config{
-		MountPoint:   *mountPoint,
-		Debug:        *debug,
-		Bucket:       *bucket,
-		Prefix:       *prefix,
-		Region:       *region,
-		Profile:      *profile,
-		Endpoint:     *endpoint,
-		EnvFile:      *envFile,
-		Dir:          *originDir,
-		UDS:          *udsPath,
-		ProxyBin:     *proxyBin,
-		SpoolDir:     *spoolDir,
-		LiveRelayURL: *liveRelayURL,
-		LibraryID:    *libraryID,
-		RelayToken:   relayToken,
+		MountPoint:      *mountPoint,
+		Debug:           *debug,
+		MetricsInterval: *metricsLogInterval,
+		Bucket:          *bucket,
+		Prefix:          *prefix,
+		Region:          *region,
+		Profile:         *profile,
+		Endpoint:        *endpoint,
+		EnvFile:         *envFile,
+		Dir:             *originDir,
+		UDS:             *udsPath,
+		ProxyBin:        *proxyBin,
+		SpoolDir:        *spoolDir,
+		LiveRelayURL:    *liveRelayURL,
+		LibraryID:       *libraryID,
+		RelayToken:      relayToken,
 	})
 	if err != nil {
 		log.Fatal(err)

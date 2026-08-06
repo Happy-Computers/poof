@@ -14,3 +14,4 @@ stream_proxy/zig-out/
 .env
 .env.local
 .env*.bak
+docs/relay-token.local.md

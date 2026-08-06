@@ -1,68 +1,109 @@
-# Live relay demo
+# Linux ↔ Windows live relay demo
 
-The relay makes an in-progress writer mount visible on another active mount before S3 completes.
-It carries catalog updates and requested byte ranges only; accepted file bytes remain on the writer's bounded spool until S3 durability succeeds.
+The relay publishes a `streaming` catalog entry after the writer accepts its first bytes and relays only requested ranges to the writer spool. S3 uploads concurrently; verified S3 objects become the source for new opens.
 
-## Start the relay
+## Shared demo configuration
 
-Run this on a host reachable from both devices. The relay does not need S3 credentials.
+| Value | Demo value | Rule |
+|---|---|---|
+| Relay URL | `http://RELAY_HOST:8080` | Reachable from both devices. Use HTTPS outside a trusted LAN. |
+| Library ID | `demo-library` | Identical on both devices. |
+| Token file | `docs/relay-token.local.md` | Ignored by Git; copy the same file to relay host and Windows. |
+| Bucket/prefix | Your existing S3 location | Identical on both devices. |
+
+`docs/relay-token.local.md` contains the preconfigured development bearer token. It is intentionally ignored and must never be committed, pasted into a shell argument, or reused outside this demo.
+
+## 1. Start the relay
+
+Run on a host reachable from Linux and Windows:
 
 ```bash
 cd /path/to/video-storage-engine
-openssl rand -base64 32 > relay.token
-chmod 600 relay.token
 go build -o infinity-storage-relay ./cmd/infinity-storage-relay
-./infinity-storage-relay --listen 0.0.0.0:8080 --token-file ./relay.token
+./infinity-storage-relay \
+  --listen 0.0.0.0:8080 \
+  --token-file docs/relay-token.local.md \
+  --debug 2>&1 | tee relay.log
 ```
 
-Use an HTTPS reverse proxy for a network outside a trusted development LAN. Every mount in this demo
-uses the same relay URL, library ID, and token file. The token grants access to that library and must
-not be placed in a shell argument or checked into source control.
+## 2. Build the clients
 
-## Linux writer
+| Linux | Windows PowerShell |
+|---|---|
+| `cd stream_proxy && zig build && cd ..` | `cd stream_proxy; zig build -Dtarget=x86_64-windows-gnu; cd ..` |
+| `go build -o infinity-storage-mount ./cmd/infinity-storage-mount` | `go build -o infinity-storage-mount.exe ./cmd/infinity-storage-mount` |
+
+Install FUSE3 on Linux and WinFsp on Windows before mounting. Verify AWS credentials on each device with `aws sts get-caller-identity`.
+
+## 3. Start Linux writer mount
 
 ```bash
+mkdir -p /tmp/infinity-storage "$HOME/.cache/infinity-storage/spool"
 ./infinity-storage-mount \
   --mount /tmp/infinity-storage \
   --bucket YOUR_BUCKET \
+  --prefix YOUR_PREFIX \
   --live-relay-url http://RELAY_HOST:8080 \
   --library-id demo-library \
-  --relay-token-file ./relay.token \
+  --relay-token-file docs/relay-token.local.md \
   --spool-dir "$HOME/.cache/infinity-storage/spool" \
-  --proxy-bin ./stream_proxy/zig-out/bin/stream_proxy
+  --proxy-bin ./stream_proxy/zig-out/bin/stream_proxy \
+  --debug \
+  --metrics-log-interval 1s 2>&1 | tee linux-mount.log
 ```
 
-## Windows observer
+## 4. Start Windows observer mount
+
+Copy `docs/relay-token.local.md` from Linux to a private path such as `C:\InfinityStorage\relay-token.local.md`, then run:
 
 ```powershell
+New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\InfinityStorage\spool"
 .\infinity-storage-mount.exe `
   --mount Z: `
   --bucket YOUR_BUCKET `
+  --prefix YOUR_PREFIX `
   --live-relay-url http://RELAY_HOST:8080 `
   --library-id demo-library `
-  --relay-token-file C:\path\to\relay.token `
+  --relay-token-file C:\InfinityStorage\relay-token.local.md `
   --spool-dir "$env:LOCALAPPDATA\InfinityStorage\spool" `
-  --proxy-bin .\stream_proxy.exe
+  --proxy-bin .\stream_proxy.exe `
+  --debug `
+  --metrics-log-interval 1s 2>&1 | Tee-Object -FilePath windows-mount.log
 ```
 
-## Expected flow
+## 5. Exercise and verify
 
-1. Drag a new flat file into the Linux mount.
-2. Its first accepted bytes publish a `streaming` catalog entry to the relay.
-3. Windows polls the relay at 250 ms intervals, lists the filename, and requests only selected ranges.
-4. The relay hands each range request to the Linux writer through one of eight outbound long-poll workers.
-5. The Linux spool serves an accepted range or waits up to 30 seconds for the writer to reach it.
-6. S3 multipart upload runs concurrently in the writer.
-7. After S3 checksum verification, the relay removes the live entry and both mounts use the existing S3 ranged-read path.
+| Step | Linux | Windows | Expected result |
+|---:|---|---|---|
+| 1 | `cp SOURCE.mp4 /tmp/infinity-storage/linux-video.mp4` | `Get-ChildItem Z:\` | Windows lists `linux-video.mp4` within about 250–500 ms after accepted bytes. |
+| 2 | Keep the copy running. | Open `Z:\linux-video.mp4` in VLC and seek. | Reads route through relay to Linux spool. A request beyond accepted bytes waits up to 30 s and then fails truthfully. |
+| 3 | Wait for writer close and S3 verification. | Keep playback open; then reopen the file. | Existing live read remains on spool; new open uses S3 ranged reads after the next S3 catalog refresh. |
+| 4 | `sha256sum SOURCE.mp4 /tmp/infinity-storage/linux-video.mp4` | `Get-FileHash Z:\linux-video.mp4 -Algorithm SHA256` | Hashes match after durability. |
+| 5 | Repeat with a unique filename copied into `Z:\`. | Verify on Linux. | Windows writer follows the same relay/S3 handoff. |
 
-The relay has a global maximum of eight concurrent 8 MiB range requests and never persists a second complete object.
+Use progressive MP4 first. A format whose metadata or needed ranges sit near the end cannot begin preview until those bytes have been accepted.
+
+## Logs and performance capture
+
+| Signal | Where | Meaning |
+|---|---|---|
+| `ingest state` | Writer mount log | `streaming`, `sealing`, `durable`, interruption, or abort transition. |
+| `ingest write` | Writer mount log | Accepted offset, byte count, and running spool size. |
+| `ingest upload queued/started/part` | Writer mount log | Multipart backpressure and completed S3 part sizes. |
+| `ingest upload error` / `live relay publish` | Writer mount log | S3 or relay failure. |
+| `relay request` | Relay log | Method, path, HTTP status, and request latency. Long writer polls naturally last up to 25 s. |
+| `metrics` | Each mount log | Go heap allocation/system reservation, GC cycles, and goroutine count. |
+
+Run these alongside the mount logs when diagnosing host or network pressure:
+
+| Linux | Windows PowerShell |
+|---|---|
+| `pidstat -rud -p $(pgrep -n infinity-storage-mount) 1` | `Get-Process infinity-storage-mount | Select-Object CPU,PM,WS,Handles` |
+| `ss -ti '( sport = :8080 or dport = :8080 )'` | `Get-NetTCPConnection -RemotePort 8080` |
+| `sar -n DEV 1` | `Get-Counter '\Network Interface(*)\Bytes Total/sec' -SampleInterval 1` |
+
+Record discovery latency, first-preview latency, S3 durability latency, handoff errors, file size, source selected, relay request status/latency, hash result, heap, and network counters for every run.
 
 ## Scope
 
-This is the demo transport before the account-owned API relay. It uses one preconfigured bearer token
-per library and keeps streaming catalog state in relay memory, so restarting the relay removes
-in-progress entries. Durable objects remain in S3 and appear through the ordinary S3 catalog.
-
-Electron forwards the relay configuration to the mount when all three environment variables are set:
-`INFINITY_STORAGE_LIVE_RELAY_URL`, `INFINITY_STORAGE_LIBRARY_ID`, and
-`INFINITY_STORAGE_RELAY_TOKEN_FILE`.
+This relay is a preconfigured-token demo transport. Its streaming catalog is in memory, so restarting it removes in-progress entries. Durable S3 objects continue to appear through the ordinary S3 catalog. Better Auth, account-scoped library ownership, durable catalog records, and short-lived mount authority remain the next phase.
