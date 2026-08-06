@@ -20,6 +20,7 @@ func main() {
 	profile := flag.String("profile", "", "AWS shared config profile")
 	envFile := flag.String("env-file", "", "optional dotenv file (default: .env then .env.local)")
 	proxyBin := flag.String("proxy-bin", "stream_proxy", "path to stream_proxy binary (multi-file)")
+	spoolDir := flag.String("spool-dir", "", "bounded local write spool directory (--bucket mode)")
 	debug := flag.Bool("debug", false, "volume debug logs")
 	flag.Parse()
 
@@ -56,6 +57,7 @@ func main() {
 		Dir:        *originDir,
 		UDS:        *udsPath,
 		ProxyBin:   *proxyBin,
+		SpoolDir:   *spoolDir,
 	})
 	if err != nil {
 		log.Fatal(err)

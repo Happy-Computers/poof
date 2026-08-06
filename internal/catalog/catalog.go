@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+type Source interface {
+	ReadAt(dest []byte, offset uint64) (int, error)
+	Size() uint64
+}
+
 // Hard limits. Change only by deliberate redesign.
 const (
 	MaxFiles     = 256
@@ -20,11 +25,15 @@ type Entry struct {
 	Name      string // basename only
 	AbsPath   string // local --dir mode
 	OriginURL string // S3 / HTTP origin mode (stream_proxy --origin-url)
+	Source    Source
 	Size      uint64
 }
 
 // SlotKey uniquely identifies the cache proxy for this entry.
 func (e Entry) SlotKey() string {
+	if e.Source != nil {
+		return e.Name
+	}
 	if e.OriginURL != "" {
 		return e.OriginURL
 	}

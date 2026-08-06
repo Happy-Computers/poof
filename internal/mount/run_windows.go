@@ -34,6 +34,8 @@ func Run(cfg Config) error {
 	switch {
 	case prep.SingleClient != nil:
 		storage = winfs.NewSingle(prep.SingleClient, prep.SingleName, prep.SingleSize)
+	case prep.Ingest != nil:
+		storage = winfs.NewMultiWritable(prep.Entries, prep.Pool, winfs.CatalogLoader(prep.Load), prep.Ingest)
 	default:
 		storage = winfs.NewMulti(prep.Entries, prep.Pool, winfs.CatalogLoader(prep.Load))
 	}
@@ -50,7 +52,7 @@ func Run(cfg Config) error {
 		host.SetCapCaseInsensitive(true)
 	}
 
-	opts := []string{"-o", "ro"}
+	opts := []string{}
 	if cfg.Debug {
 		opts = append(opts, "-o", "debug")
 	}

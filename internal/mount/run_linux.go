@@ -42,7 +42,7 @@ func Run(cfg Config) error {
 			Debug:      cfg.Debug,
 			FsName:     "infinity-storage",
 			Name:       "infinity-storage",
-			Options:    []string{"ro", "default_permissions"},
+			Options:    []string{"default_permissions"},
 		},
 	}
 	zero := time.Duration(0)
@@ -54,6 +54,16 @@ func Run(cfg Config) error {
 	switch {
 	case prep.SingleClient != nil:
 		root = linux.NewRootSingle(prep.SingleClient, prep.SingleName, prep.SingleSize)
+	case prep.Ingest != nil:
+		live := linux.NewRootMultiWritable(prep.Entries, prep.Pool, linux.CatalogLoader(prep.Load), prep.Ingest)
+		root = live
+		oldCleanup := cleanup
+		cleanup = func() {
+			live.Stop()
+			if oldCleanup != nil {
+				oldCleanup()
+			}
+		}
 	case prep.Load != nil:
 		live := linux.NewRootMultiLive(prep.Entries, prep.Pool, linux.CatalogLoader(prep.Load))
 		root = live

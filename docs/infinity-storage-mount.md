@@ -1,4 +1,4 @@
-# infinity-storage-mount — read-only Infinity Storage
+# infinity-storage-mount — Infinity Storage
 
 Go volume client. Apps see a normal folder/drive; reads stream through the Zig block cache.
 
@@ -16,7 +16,7 @@ internal/{catalog,s3origin,proxypool,cacheclient,awsutil}  shared
 stream_proxy             Zig byte cache (UDS on Linux, --listen-tcp on Windows)
 ```
 
-**Product proof:** objects already in the cloud bucket appear under the mount and are previewable via ranged reads — no full download first. `aws s3 cp` is a **dev/test harness only**, not product ingest.
+**Product proof:** objects already in the cloud bucket appear under the mount and are previewable via ranged reads, while new flat files use a bounded local spool and multipart S3 upload. `aws s3 cp` remains a dev/test harness for pre-seeding reads.
 
 ```text
 Apps → infinity-storage-mount --bucket
@@ -63,7 +63,13 @@ Flat bucket root only (`Delimiter=/`). Caps: `MaxFiles=256`, `MaxActiveProxies=4
 
 Catalog refreshes live (~2s / on `ls`, min 1s between ListObjects).
 
-Optional: `--prefix`, `--region`, `--profile`, `--endpoint`, `--env-file`.
+Optional: `--prefix`, `--region`, `--profile`, `--endpoint`, `--env-file`, `--spool-dir`.
+
+## Bounded writes
+
+`--bucket` accepts new flat files only. A pathname is reserved before its first byte, writes must be sequential, and existing files, truncation, rename, deletion, directories, and sparse writes are rejected. The writer mount exposes accepted bytes immediately through its live spool while 16 MiB S3 multipart parts upload concurrently. A successful multipart checksum verification makes future opens use the normal S3 range path after the catalog refresh; open live reads retain their spool source.
+
+Hard caps: two active write handles, 64 GiB total spool and per-file size, 4,096 parts, 64 MiB upload-buffer budget, 8 concurrent live reads of up to 8 MiB, and a 30 second unwritten-range wait. Pass `--spool-dir PATH` to control where accepted data remains while durability is pending; the default is `${TMPDIR}/infinity-storage-spool`.
 
 ### Local harness (`--dir`)
 
@@ -152,9 +158,9 @@ Go: 256 files, 4 active proxies, S3 8 MiB range / 4 concurrent fetches.
 
 ## Not yet (later ladder)
 
-- Bounded sequential multipart writes on Linux and Windows (E)
 - Account-owned Postgres catalog and cross-device visibility (F)
 - NLE random-write, rename, replacement, and lease semantics (D)
+- Atomic S3 handoff grace cleanup for live open handles
 - Nested directories
 - macOS volume backend
 

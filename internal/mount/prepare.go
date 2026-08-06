@@ -6,12 +6,15 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/amaan/infinity-storage/internal/awsutil"
 	"github.com/amaan/infinity-storage/internal/cacheclient"
 	"github.com/amaan/infinity-storage/internal/catalog"
+	"github.com/amaan/infinity-storage/internal/ingest"
 	"github.com/amaan/infinity-storage/internal/proxypool"
 	"github.com/amaan/infinity-storage/internal/s3origin"
 )
@@ -26,6 +29,7 @@ type Prepared struct {
 	Load    CatalogLoader
 	Cleanup func()
 	Summary string
+	Ingest  *ingest.Manager
 
 	// Single-file (--uds / --listen-tcp style) mode.
 	SingleClient *cacheclient.Client
@@ -102,6 +106,27 @@ func prepareBucket(cfg Config, proxyBin string) (*Prepared, error) {
 	}
 	entries = catalog.WithOriginBase(entries, originBase)
 
+	uploadPrefix := strings.Trim(cfg.Prefix, "/")
+	if uploadPrefix != "" {
+		uploadPrefix += "/"
+	}
+	uploadStore, err := ingest.NewS3Store(s3Client, cfg.Bucket, uploadPrefix)
+	if err != nil {
+		_ = httpServer.Close()
+		_ = ln.Close()
+		return nil, err
+	}
+	spoolDir := cfg.SpoolDir
+	if spoolDir == "" {
+		spoolDir = filepath.Join(os.TempDir(), "infinity-storage-spool")
+	}
+	manager, err := ingest.NewManager(ingest.Config{SpoolDir: spoolDir, Store: uploadStore})
+	if err != nil {
+		_ = httpServer.Close()
+		_ = ln.Close()
+		return nil, err
+	}
+
 	pool, err := proxypool.New(proxypool.Config{ProxyBin: proxyBin})
 	if err != nil {
 		_ = httpServer.Close()
@@ -136,6 +161,7 @@ func prepareBucket(cfg Config, proxyBin string) (*Prepared, error) {
 		Load:    load,
 		Cleanup: cleanup,
 		Summary: summary,
+		Ingest:  manager,
 	}, nil
 }
 

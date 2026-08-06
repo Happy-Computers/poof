@@ -26,4 +26,5 @@ type Config struct {
 	UDS string // SPCH endpoint: Unix socket path, or host:port for TCP
 
 	ProxyBin string
+	SpoolDir string
 }

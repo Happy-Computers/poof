@@ -1,6 +1,5 @@
 //go:build windows
 
-// Package windows is the WinFsp (cgofuse) volume backend for Infinity Storage.
 package windows
 
 import (
@@ -13,19 +12,19 @@ import (
 
 	"github.com/amaan/infinity-storage/internal/cacheclient"
 	"github.com/amaan/infinity-storage/internal/catalog"
+	"github.com/amaan/infinity-storage/internal/ingest"
 	"github.com/amaan/infinity-storage/internal/proxypool"
 	"github.com/amaan/infinity-storage/internal/s3origin"
 	"github.com/winfsp/cgofuse/fuse"
 )
 
-// CatalogLoader re-lists Infinity Storage entries. Nil means static catalog.
 type CatalogLoader func(ctx context.Context) ([]catalog.Entry, error)
 
-// InfinityStorageFS is a read-only flat Infinity Storage volume for WinFsp via cgofuse.
 type InfinityStorageFS struct {
 	fuse.FileSystemBase
 
-	pool *proxypool.Pool
+	pool   *proxypool.Pool
+	ingest *ingest.Manager
 
 	mu          sync.Mutex
 	entries     map[string]catalog.Entry
@@ -34,7 +33,6 @@ type InfinityStorageFS struct {
 	stopPoll    chan struct{}
 	pollOnce    sync.Once
 
-	// Single-file mode.
 	single     *cacheclient.Client
 	singleName string
 	singleSize uint64
@@ -43,33 +41,46 @@ type InfinityStorageFS struct {
 	nextHandle uint64
 }
 
+type ByteSource interface {
+	ReadAt(dest []byte, offset uint64) (int, error)
+}
+
 type openHandle struct {
-	client  *cacheclient.Client
+	source  ByteSource
+	live    catalog.Source
+	writer  *ingest.File
 	release func()
 	size    uint64
 }
 
-// NewMulti builds a multi-file root (optional live loader).
 func NewMulti(entries []catalog.Entry, pool *proxypool.Pool, load CatalogLoader) *InfinityStorageFS {
-	m := make(map[string]catalog.Entry, len(entries))
-	for _, e := range entries {
-		m[e.Name] = e
+	return newMulti(entries, pool, load, nil)
+}
+
+func NewMultiWritable(entries []catalog.Entry, pool *proxypool.Pool, load CatalogLoader, manager *ingest.Manager) *InfinityStorageFS {
+	return newMulti(entries, pool, load, manager)
+}
+
+func newMulti(entries []catalog.Entry, pool *proxypool.Pool, load CatalogLoader, manager *ingest.Manager) *InfinityStorageFS {
+	mapped := make(map[string]catalog.Entry, len(entries))
+	for _, entry := range entries {
+		mapped[entry.Name] = entry
 	}
-	fs := &InfinityStorageFS{
+	filesystem := &InfinityStorageFS{
 		pool:       pool,
-		entries:    m,
+		ingest:     manager,
+		entries:    mapped,
 		load:       load,
 		stopPoll:   make(chan struct{}),
 		handles:    make(map[uint64]*openHandle),
 		nextHandle: 1,
 	}
 	if load != nil {
-		go fs.pollCatalog()
+		go filesystem.pollCatalog()
 	}
-	return fs
+	return filesystem
 }
 
-// NewSingle builds a single-file Infinity Storage root.
 func NewSingle(client *cacheclient.Client, name string, size uint64) *InfinityStorageFS {
 	return &InfinityStorageFS{
 		single:     client,
@@ -81,7 +92,6 @@ func NewSingle(client *cacheclient.Client, name string, size uint64) *InfinitySt
 	}
 }
 
-// Stop halts the background catalog poller.
 func (f *InfinityStorageFS) Stop() {
 	f.pollOnce.Do(func() {
 		close(f.stopPoll)
@@ -97,17 +107,16 @@ func (f *InfinityStorageFS) Destroy() {
 	f.FileSystemBase.Destroy()
 }
 
-func (f *InfinityStorageFS) Getattr(p string, stat *fuse.Stat_t, fh uint64) (errc int) {
+func (f *InfinityStorageFS) Getattr(p string, stat *fuse.Stat_t, fh uint64) int {
 	p = cleanPath(p)
 	if p == "/" {
-		stat.Mode = fuse.S_IFDIR | 0555
+		stat.Mode = fuse.S_IFDIR | 0755
 		return 0
 	}
 	name := strings.TrimPrefix(p, "/")
 	if strings.Contains(name, "/") {
 		return -fuse.ENOENT
 	}
-
 	if f.single != nil {
 		if name != f.singleName {
 			return -fuse.ENOENT
@@ -116,122 +125,191 @@ func (f *InfinityStorageFS) Getattr(p string, stat *fuse.Stat_t, fh uint64) (err
 		stat.Size = int64(f.singleSize)
 		return 0
 	}
-
 	f.maybeRefresh()
 	f.mu.Lock()
-	e, ok := f.entries[name]
+	entry, ok := f.entries[name]
 	f.mu.Unlock()
 	if !ok {
 		return -fuse.ENOENT
 	}
 	stat.Mode = fuse.S_IFREG | 0444
-	stat.Size = int64(e.Size)
+	stat.Size = int64(entry.Size)
+	if entry.Source != nil {
+		stat.Mode = fuse.S_IFREG | 0644
+		stat.Size = int64(entry.Source.Size())
+	}
 	return 0
 }
 
-func (f *InfinityStorageFS) Open(p string, flags int) (errc int, fh uint64) {
-	_ = flags
+func (f *InfinityStorageFS) Open(p string, flags int) (int, uint64) {
+	if flags&3 != 0 {
+		return -fuse.EROFS, ^uint64(0)
+	}
 	p = cleanPath(p)
 	name := strings.TrimPrefix(p, "/")
 	if name == "" || strings.Contains(name, "/") {
 		return -fuse.ENOENT, ^uint64(0)
 	}
-
 	if f.single != nil {
 		if name != f.singleName {
 			return -fuse.ENOENT, ^uint64(0)
 		}
-		f.mu.Lock()
-		fh = f.nextHandle
-		f.nextHandle++
-		f.handles[fh] = &openHandle{client: f.single, size: f.singleSize}
-		f.mu.Unlock()
-		return 0, fh
+		return f.addHandle(&openHandle{source: f.single, size: f.singleSize})
 	}
-
 	f.maybeRefresh()
 	f.mu.Lock()
-	e, ok := f.entries[name]
+	entry, ok := f.entries[name]
 	f.mu.Unlock()
 	if !ok {
 		return -fuse.ENOENT, ^uint64(0)
 	}
-
-	client, release, err := f.pool.Acquire(e)
+	if entry.Source != nil {
+		return f.addHandle(&openHandle{source: entry.Source, live: entry.Source})
+	}
+	client, release, err := f.pool.Acquire(entry)
 	if err != nil {
 		if errors.Is(err, proxypool.ErrBusy) {
 			return -fuse.EBUSY, ^uint64(0)
 		}
 		return -fuse.EIO, ^uint64(0)
 	}
-
-	f.mu.Lock()
-	fh = f.nextHandle
-	f.nextHandle++
-	f.handles[fh] = &openHandle{client: client, release: release, size: e.Size}
-	f.mu.Unlock()
-	return 0, fh
+	return f.addHandle(&openHandle{source: client, release: release, size: entry.Size})
 }
 
-func (f *InfinityStorageFS) Release(p string, fh uint64) int {
+func (f *InfinityStorageFS) addHandle(handle *openHandle) (int, uint64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	handleID := f.nextHandle
+	f.nextHandle++
+	f.handles[handleID] = handle
+	return 0, handleID
+}
+
+func (f *InfinityStorageFS) Create(p string, flags int, mode uint32) (int, uint64) {
+	_ = flags
+	_ = mode
+	if f.ingest == nil {
+		return -fuse.EROFS, ^uint64(0)
+	}
+	name := strings.TrimPrefix(cleanPath(p), "/")
+	if name == "" || strings.Contains(name, "/") {
+		return -fuse.EINVAL, ^uint64(0)
+	}
+	f.mu.Lock()
+	_, exists := f.entries[name]
+	f.mu.Unlock()
+	if exists {
+		return -fuse.EEXIST, ^uint64(0)
+	}
+	file, err := f.ingest.Reserve(name)
+	if err != nil {
+		return windowsIngestErrno(err), ^uint64(0)
+	}
+	f.mu.Lock()
+	f.entries[name] = catalog.Entry{Name: name, Source: file}
+	handleID := f.nextHandle
+	f.nextHandle++
+	f.handles[handleID] = &openHandle{writer: file}
+	f.mu.Unlock()
+	return 0, handleID
+}
+
+func (f *InfinityStorageFS) Release(p string, handleID uint64) int {
 	_ = p
 	f.mu.Lock()
-	h, ok := f.handles[fh]
+	handle, ok := f.handles[handleID]
 	if ok {
-		delete(f.handles, fh)
+		delete(f.handles, handleID)
 	}
 	f.mu.Unlock()
-	if ok && h.release != nil {
-		h.release()
+	if !ok {
+		return -fuse.EBADF
+	}
+	if handle.release != nil {
+		handle.release()
+	}
+	if handle.writer != nil {
+		return windowsIngestErrno(handle.writer.Close())
 	}
 	return 0
 }
 
-func (f *InfinityStorageFS) Read(p string, buff []byte, ofst int64, fh uint64) (n int) {
+func (f *InfinityStorageFS) Read(p string, buff []byte, offset int64, handleID uint64) int {
 	_ = p
+	if offset < 0 {
+		return 0
+	}
 	f.mu.Lock()
-	h, ok := f.handles[fh]
+	handle, ok := f.handles[handleID]
 	f.mu.Unlock()
-	if !ok || h.client == nil {
+	if !ok || handle.source == nil {
 		return 0
 	}
-	if ofst < 0 {
+	size := handle.size
+	if handle.live != nil {
+		size = handle.live.Size()
+	}
+	if uint64(offset) >= size {
 		return 0
 	}
-	if uint64(ofst) >= h.size {
-		return 0
-	}
-	remaining := h.size - uint64(ofst)
+	remaining := size - uint64(offset)
 	want := uint64(len(buff))
 	if want > remaining {
 		want = remaining
 	}
-	got, err := h.client.ReadAt(buff[:want], uint64(ofst))
+	got, err := handle.source.ReadAt(buff[:want], uint64(offset))
 	if err != nil {
 		return 0
 	}
 	return got
 }
 
-func (f *InfinityStorageFS) Readdir(p string,
-	fill func(name string, stat *fuse.Stat_t, ofst int64) bool,
-	ofst int64,
-	fh uint64,
-) (errc int) {
-	_ = ofst
-	_ = fh
-	p = cleanPath(p)
-	if p != "/" {
+func (f *InfinityStorageFS) Write(p string, buff []byte, offset int64, handleID uint64) int {
+	_ = p
+	if offset < 0 {
+		return -fuse.EINVAL
+	}
+	f.mu.Lock()
+	handle, ok := f.handles[handleID]
+	f.mu.Unlock()
+	if !ok || handle.writer == nil {
+		return -fuse.EBADF
+	}
+	written, err := handle.writer.WriteAt(buff, uint64(offset))
+	if err != nil {
+		return windowsIngestErrno(err)
+	}
+	return written
+}
+
+func (f *InfinityStorageFS) Flush(p string, handleID uint64) int {
+	_ = p
+	f.mu.Lock()
+	handle, ok := f.handles[handleID]
+	f.mu.Unlock()
+	if !ok || handle.writer == nil {
+		return 0
+	}
+	return windowsIngestErrno(handle.writer.Flush())
+}
+
+func (f *InfinityStorageFS) Fsync(p string, datasync bool, handleID uint64) int {
+	_ = datasync
+	return f.Flush(p, handleID)
+}
+
+func (f *InfinityStorageFS) Readdir(p string, fill func(name string, stat *fuse.Stat_t, offset int64) bool, offset int64, handleID uint64) int {
+	_ = offset
+	_ = handleID
+	if cleanPath(p) != "/" {
 		return -fuse.ENOENT
 	}
 	fill(".", nil, 0)
 	fill("..", nil, 0)
-
 	if f.single != nil {
 		fill(f.singleName, nil, 0)
 		return 0
 	}
-
 	f.maybeRefresh()
 	f.mu.Lock()
 	names := make([]string, 0, len(f.entries))
@@ -254,10 +332,9 @@ func (f *InfinityStorageFS) maybeRefresh() {
 	f.mu.Lock()
 	due := time.Since(f.lastRefresh) >= time.Duration(s3origin.MinCatalogRefresh)*time.Second
 	f.mu.Unlock()
-	if !due {
-		return
+	if due {
+		f.refresh(context.Background())
 	}
-	f.refresh(context.Background())
 }
 
 func (f *InfinityStorageFS) pollCatalog() {
@@ -281,14 +358,38 @@ func (f *InfinityStorageFS) refresh(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.lastRefresh = time.Now()
 	wanted := make(map[string]catalog.Entry, len(entries))
-	for _, e := range entries {
-		wanted[e.Name] = e
+	for _, entry := range entries {
+		wanted[entry.Name] = entry
 	}
+	if f.ingest != nil {
+		for _, entry := range f.ingest.Entries() {
+			wanted[entry.Name] = entry
+		}
+	}
+	f.mu.Lock()
+	f.lastRefresh = time.Now()
 	f.entries = wanted
+	f.mu.Unlock()
+}
+
+func windowsIngestErrno(err error) int {
+	if err == nil {
+		return 0
+	}
+	if errors.Is(err, ingest.ErrNonSequential) {
+		return -fuse.EINVAL
+	}
+	if errors.Is(err, ingest.ErrSpoolFull) || errors.Is(err, ingest.ErrFileTooLarge) {
+		return -fuse.ENOSPC
+	}
+	if errors.Is(err, ingest.ErrActiveWriteLimit) || errors.Is(err, ingest.ErrCatalogFull) {
+		return -fuse.EBUSY
+	}
+	if errors.Is(err, ingest.ErrNameExists) {
+		return -fuse.EEXIST
+	}
+	return -fuse.EIO
 }
 
 func cleanPath(p string) string {
