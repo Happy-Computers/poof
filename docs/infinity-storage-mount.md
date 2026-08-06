@@ -2,7 +2,7 @@
 
 Go volume client. Apps see a normal folder/drive; reads stream through the Zig block cache.
 
-Related: [`architecture.md`](architecture.md) · [`spch.md`](spch.md) · [`s3-origin.md`](s3-origin.md) · [`mvp-plan.md`](mvp-plan.md)
+Related: [`architecture.md`](architecture.md) · [`spch.md`](spch.md) · [`s3-origin.md`](s3-origin.md) · [`live-relay.md`](live-relay.md) · [`mvp-plan.md`](mvp-plan.md)
 
 ## Layout
 
@@ -70,6 +70,8 @@ Optional: `--prefix`, `--region`, `--profile`, `--endpoint`, `--env-file`, `--sp
 `--bucket` accepts new flat files only. A pathname is reserved before its first byte, writes must be sequential, and existing files, truncation, rename, deletion, directories, and sparse writes are rejected. The writer mount exposes accepted bytes immediately through its live spool while 16 MiB S3 multipart parts upload concurrently. A successful multipart checksum verification makes future opens use the normal S3 range path after the catalog refresh; open live reads retain their spool source.
 
 Hard caps: two active write handles, 64 GiB total spool and per-file size, 4,096 parts, 64 MiB upload-buffer budget, 8 concurrent live reads of up to 8 MiB, and a 30 second unwritten-range wait. Pass `--spool-dir PATH` to control where accepted data remains while durability is pending; the default is `${TMPDIR}/infinity-storage-spool`.
+
+Pass `--live-relay-url`, `--library-id`, and `--relay-token-file` on both mounts to publish streaming files before S3 completes. See [`live-relay.md`](live-relay.md) for the cross-device demo.
 
 ### Local harness (`--dir`)
 
