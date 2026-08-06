@@ -91,13 +91,14 @@ type RootMulti struct {
 	pool   *proxypool.Pool
 	ingest *ingest.Manager
 
-	mu          sync.Mutex
-	entries     map[string]catalog.Entry
-	load        CatalogLoader
-	lastRefresh time.Time
-	nextIno     uint64
-	stopPoll    chan struct{}
-	pollOnce    sync.Once
+	mu           sync.Mutex
+	entries      map[string]catalog.Entry
+	load         CatalogLoader
+	lastRefresh  time.Time
+	nextIno      uint64
+	pollInterval time.Duration
+	stopPoll     chan struct{}
+	pollOnce     sync.Once
 }
 
 // NewRootMulti builds a static multi-file root (--dir harness).
@@ -110,7 +111,9 @@ func NewRootMultiLive(entries []catalog.Entry, pool *proxypool.Pool, load Catalo
 }
 
 func NewRootMultiWritable(entries []catalog.Entry, pool *proxypool.Pool, load CatalogLoader, manager *ingest.Manager) *RootMulti {
-	return newRootMulti(entries, pool, load, manager)
+	root := newRootMulti(entries, pool, load, manager)
+	root.pollInterval = 250 * time.Millisecond
+	return root
 }
 
 func newRootMulti(entries []catalog.Entry, pool *proxypool.Pool, load CatalogLoader, manager *ingest.Manager) *RootMulti {
@@ -119,12 +122,13 @@ func newRootMulti(entries []catalog.Entry, pool *proxypool.Pool, load CatalogLoa
 		m[e.Name] = e
 	}
 	r := &RootMulti{
-		pool:     pool,
-		ingest:   manager,
-		entries:  m,
-		load:     load,
-		nextIno:  2,
-		stopPoll: make(chan struct{}),
+		pool:         pool,
+		ingest:       manager,
+		entries:      m,
+		load:         load,
+		nextIno:      2,
+		pollInterval: 2 * time.Second,
+		stopPoll:     make(chan struct{}),
 	}
 	return r
 }
@@ -241,7 +245,7 @@ func (r *RootMulti) maybeRefresh(ctx context.Context) {
 }
 
 func (r *RootMulti) pollCatalog() {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(r.pollInterval)
 	defer ticker.Stop()
 	for {
 		select {

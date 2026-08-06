@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/amaan/infinity-storage/internal/mount"
 )
@@ -21,12 +22,23 @@ func main() {
 	envFile := flag.String("env-file", "", "optional dotenv file (default: .env then .env.local)")
 	proxyBin := flag.String("proxy-bin", "stream_proxy", "path to stream_proxy binary (multi-file)")
 	spoolDir := flag.String("spool-dir", "", "bounded local write spool directory (--bucket mode)")
+	liveRelayURL := flag.String("live-relay-url", "", "authenticated live relay URL (--bucket mode)")
+	libraryID := flag.String("library-id", "", "live relay library ID (--bucket mode)")
+	relayTokenFile := flag.String("relay-token-file", "", "file containing the live relay bearer token (--bucket mode)")
 	debug := flag.Bool("debug", false, "volume debug logs")
 	flag.Parse()
 
 	if *mountPoint == "" {
 		usage()
 		os.Exit(2)
+	}
+	relayToken := ""
+	if *relayTokenFile != "" {
+		content, err := os.ReadFile(*relayTokenFile)
+		if err != nil {
+			log.Fatalf("read relay token file: %v", err)
+		}
+		relayToken = strings.TrimSpace(string(content))
 	}
 
 	modes := 0
@@ -46,18 +58,21 @@ func main() {
 	}
 
 	err := mount.Run(mount.Config{
-		MountPoint: *mountPoint,
-		Debug:      *debug,
-		Bucket:     *bucket,
-		Prefix:     *prefix,
-		Region:     *region,
-		Profile:    *profile,
-		Endpoint:   *endpoint,
-		EnvFile:    *envFile,
-		Dir:        *originDir,
-		UDS:        *udsPath,
-		ProxyBin:   *proxyBin,
-		SpoolDir:   *spoolDir,
+		MountPoint:   *mountPoint,
+		Debug:        *debug,
+		Bucket:       *bucket,
+		Prefix:       *prefix,
+		Region:       *region,
+		Profile:      *profile,
+		Endpoint:     *endpoint,
+		EnvFile:      *envFile,
+		Dir:          *originDir,
+		UDS:          *udsPath,
+		ProxyBin:     *proxyBin,
+		SpoolDir:     *spoolDir,
+		LiveRelayURL: *liveRelayURL,
+		LibraryID:    *libraryID,
+		RelayToken:   relayToken,
 	})
 	if err != nil {
 		log.Fatal(err)

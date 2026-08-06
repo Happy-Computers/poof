@@ -27,4 +27,8 @@ type Config struct {
 
 	ProxyBin string
 	SpoolDir string
+
+	LiveRelayURL string
+	LibraryID    string
+	RelayToken   string
 }

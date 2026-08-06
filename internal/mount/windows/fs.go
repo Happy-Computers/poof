@@ -26,12 +26,13 @@ type InfinityStorageFS struct {
 	pool   *proxypool.Pool
 	ingest *ingest.Manager
 
-	mu          sync.Mutex
-	entries     map[string]catalog.Entry
-	load        CatalogLoader
-	lastRefresh time.Time
-	stopPoll    chan struct{}
-	pollOnce    sync.Once
+	mu           sync.Mutex
+	entries      map[string]catalog.Entry
+	load         CatalogLoader
+	lastRefresh  time.Time
+	pollInterval time.Duration
+	stopPoll     chan struct{}
+	pollOnce     sync.Once
 
 	single     *cacheclient.Client
 	singleName string
@@ -58,7 +59,9 @@ func NewMulti(entries []catalog.Entry, pool *proxypool.Pool, load CatalogLoader)
 }
 
 func NewMultiWritable(entries []catalog.Entry, pool *proxypool.Pool, load CatalogLoader, manager *ingest.Manager) *InfinityStorageFS {
-	return newMulti(entries, pool, load, manager)
+	filesystem := newMulti(entries, pool, load, manager)
+	filesystem.pollInterval = 250 * time.Millisecond
+	return filesystem
 }
 
 func newMulti(entries []catalog.Entry, pool *proxypool.Pool, load CatalogLoader, manager *ingest.Manager) *InfinityStorageFS {
@@ -67,13 +70,14 @@ func newMulti(entries []catalog.Entry, pool *proxypool.Pool, load CatalogLoader,
 		mapped[entry.Name] = entry
 	}
 	filesystem := &InfinityStorageFS{
-		pool:       pool,
-		ingest:     manager,
-		entries:    mapped,
-		load:       load,
-		stopPoll:   make(chan struct{}),
-		handles:    make(map[uint64]*openHandle),
-		nextHandle: 1,
+		pool:         pool,
+		ingest:       manager,
+		entries:      mapped,
+		load:         load,
+		pollInterval: 2 * time.Second,
+		stopPoll:     make(chan struct{}),
+		handles:      make(map[uint64]*openHandle),
+		nextHandle:   1,
 	}
 	if load != nil {
 		go filesystem.pollCatalog()
@@ -338,7 +342,7 @@ func (f *InfinityStorageFS) maybeRefresh() {
 }
 
 func (f *InfinityStorageFS) pollCatalog() {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(f.pollInterval)
 	defer ticker.Stop()
 	for {
 		select {

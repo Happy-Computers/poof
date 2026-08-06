@@ -79,6 +79,7 @@ type Config struct {
 	MaxFileBytes    uint64
 	RangeWait       time.Duration
 	UploadAttempts  int
+	Publish         func(Snapshot)
 }
 
 type Snapshot struct {
@@ -99,6 +100,7 @@ type Manager struct {
 	maxFileBytes    uint64
 	rangeWait       time.Duration
 	uploadAttempts  int
+	publish         func(Snapshot)
 
 	spoolBytes   uint64
 	activeWrites int
@@ -183,6 +185,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		maxFileBytes:    maxFileBytes,
 		rangeWait:       rangeWait,
 		uploadAttempts:  uploadAttempts,
+		publish:         cfg.Publish,
 		files:           make(map[string]*File),
 		uploadTokens:    make(chan struct{}, maxActiveWrites),
 	}, nil
@@ -262,6 +265,14 @@ func (m *Manager) Entries() []catalog.Entry {
 	return entries
 }
 
+func (m *Manager) notify(file *File) {
+	if m.publish != nil {
+		go func() {
+			m.publish(file.Snapshot())
+		}()
+	}
+}
+
 func (m *Manager) reserveSpoolBytes(count uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -322,6 +333,7 @@ func (f *File) WriteAt(content []byte, offset uint64) (int, error) {
 			go f.runUpload()
 		}
 		f.changed.Broadcast()
+		f.manager.notify(f)
 	}
 	if n < len(content) {
 		f.manager.releaseSpoolBytes(uint64(len(content) - n))
@@ -352,6 +364,7 @@ func (f *File) abortLocked() {
 		if f.state == StateAborting {
 			f.state = StateAborted
 			f.changed.Broadcast()
+			f.manager.notify(f)
 		}
 		f.mu.Unlock()
 	}()
@@ -390,6 +403,7 @@ func (f *File) Close() error {
 		f.state = StateSealing
 	}
 	f.changed.Broadcast()
+	f.manager.notify(f)
 	return nil
 }
 
@@ -512,6 +526,7 @@ func (f *File) Abort(ctx context.Context) error {
 	f.mu.Lock()
 	f.state = StateAborted
 	f.changed.Broadcast()
+	f.manager.notify(f)
 	f.mu.Unlock()
 	return nil
 }
@@ -588,6 +603,7 @@ func (f *File) runUpload() {
 	f.mu.Lock()
 	f.state = StateDurable
 	f.changed.Broadcast()
+	f.manager.notify(f)
 	f.mu.Unlock()
 }
 
@@ -629,6 +645,7 @@ func (f *File) setUploadError(err error) {
 	defer f.mu.Unlock()
 	f.uploadErr = err
 	f.changed.Broadcast()
+	f.manager.notify(f)
 }
 
 func validateName(name string) error {

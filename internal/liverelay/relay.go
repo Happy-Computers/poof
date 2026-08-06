@@ -199,6 +199,9 @@ func (s *Server) publish(library string, stream Stream) {
 		s.streams[library] = make(map[string]Stream)
 	}
 	previous, exists := s.streams[library][stream.Name]
+	if exists && (previous.State == "durable" || previous.State == "aborted") {
+		return
+	}
 	if exists && previous.Size > stream.Size {
 		return
 	}

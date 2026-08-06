@@ -15,6 +15,7 @@ import (
 	"github.com/amaan/infinity-storage/internal/cacheclient"
 	"github.com/amaan/infinity-storage/internal/catalog"
 	"github.com/amaan/infinity-storage/internal/ingest"
+	"github.com/amaan/infinity-storage/internal/liverelay"
 	"github.com/amaan/infinity-storage/internal/proxypool"
 	"github.com/amaan/infinity-storage/internal/s3origin"
 )
@@ -50,6 +51,22 @@ func prepareConfig(cfg Config) (proxyBin string, err error) {
 	}
 	if modes != 1 {
 		return "", fmt.Errorf("mount: provide exactly one of Bucket, Dir, or UDS")
+	}
+	relayFields := 0
+	if cfg.LiveRelayURL != "" {
+		relayFields++
+	}
+	if cfg.LibraryID != "" {
+		relayFields++
+	}
+	if cfg.RelayToken != "" {
+		relayFields++
+	}
+	if relayFields != 0 && relayFields != 3 {
+		return "", fmt.Errorf("mount: live relay requires LiveRelayURL, LibraryID, and RelayToken")
+	}
+	if relayFields != 0 && cfg.Bucket == "" {
+		return "", fmt.Errorf("mount: live relay requires Bucket mode")
 	}
 	proxyBin = cfg.ProxyBin
 	if proxyBin == "" {
@@ -116,15 +133,50 @@ func prepareBucket(cfg Config, proxyBin string) (*Prepared, error) {
 		_ = ln.Close()
 		return nil, err
 	}
+	var relay *liverelay.Client
+	if cfg.LiveRelayURL != "" {
+		relay, err = liverelay.NewClient(liverelay.Config{
+			URL:     cfg.LiveRelayURL,
+			Library: cfg.LibraryID,
+			Token:   cfg.RelayToken,
+		})
+		if err != nil {
+			_ = httpServer.Close()
+			_ = ln.Close()
+			return nil, err
+		}
+	}
 	spoolDir := cfg.SpoolDir
 	if spoolDir == "" {
 		spoolDir = filepath.Join(os.TempDir(), "infinity-storage-spool")
 	}
-	manager, err := ingest.NewManager(ingest.Config{SpoolDir: spoolDir, Store: uploadStore})
+	manager, err := ingest.NewManager(ingest.Config{
+		SpoolDir: spoolDir,
+		Store:    uploadStore,
+		Publish: func(snapshot ingest.Snapshot) {
+			if relay == nil {
+				return
+			}
+			publishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := relay.Publish(publishCtx, snapshot); err != nil {
+				log.Printf("live relay publish %s: %v", snapshot.Name, err)
+			}
+		},
+	})
 	if err != nil {
 		_ = httpServer.Close()
 		_ = ln.Close()
 		return nil, err
+	}
+	if relay != nil {
+		liveEntries, err := relay.Load(ctx)
+		if err != nil {
+			_ = httpServer.Close()
+			_ = ln.Close()
+			return nil, fmt.Errorf("live relay catalog: %w", err)
+		}
+		entries = mergeEntries(liveEntries, entries)
 	}
 
 	pool, err := proxypool.New(proxypool.Config{ProxyBin: proxyBin})
@@ -135,6 +187,14 @@ func prepareBucket(cfg Config, proxyBin string) (*Prepared, error) {
 	}
 
 	load := func(ctx context.Context) ([]catalog.Entry, error) {
+		var liveEntries []catalog.Entry
+		if relay != nil {
+			loaded, err := relay.Load(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("live relay catalog: %w", err)
+			}
+			liveEntries = loaded
+		}
 		if err := store.Refresh(ctx); err != nil {
 			return nil, err
 		}
@@ -143,10 +203,15 @@ func prepareBucket(cfg Config, proxyBin string) (*Prepared, error) {
 		for _, m := range metas {
 			ents = append(ents, catalog.Entry{Name: m.Name, Size: m.Size})
 		}
-		return catalog.WithOriginBase(ents, originBase), nil
+		return mergeEntries(liveEntries, catalog.WithOriginBase(ents, originBase)), nil
 	}
 
+	liveCtx, stopLive := context.WithCancel(context.Background())
+	if relay != nil {
+		relay.Start(liveCtx, manager)
+	}
 	cleanup := func() {
+		stopLive()
 		_ = pool.Close()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -163,6 +228,21 @@ func prepareBucket(cfg Config, proxyBin string) (*Prepared, error) {
 		Summary: summary,
 		Ingest:  manager,
 	}, nil
+}
+
+func mergeEntries(first, second []catalog.Entry) []catalog.Entry {
+	entries := make(map[string]catalog.Entry, len(first)+len(second))
+	for _, entry := range first {
+		entries[entry.Name] = entry
+	}
+	for _, entry := range second {
+		entries[entry.Name] = entry
+	}
+	out := make([]catalog.Entry, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry)
+	}
+	return out
 }
 
 func prepareDir(cfg Config, proxyBin string) (*Prepared, error) {
