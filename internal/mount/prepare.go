@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/amaan/infinity-storage/internal/awsutil"
@@ -122,6 +123,9 @@ func prepareBucket(cfg Config, proxyBin string) (*Prepared, error) {
 		})
 	}
 	entries = catalog.WithOriginBase(entries, originBase)
+	remoteEntries := append([]catalog.Entry(nil), entries...)
+	lastS3Refresh := time.Now()
+	var catalogMu sync.Mutex
 
 	uploadPrefix := strings.Trim(cfg.Prefix, "/")
 	if uploadPrefix != "" {
@@ -195,15 +199,23 @@ func prepareBucket(cfg Config, proxyBin string) (*Prepared, error) {
 			}
 			liveEntries = loaded
 		}
-		if err := store.Refresh(ctx); err != nil {
-			return nil, err
+		catalogMu.Lock()
+		if time.Since(lastS3Refresh) >= time.Second {
+			if err := store.Refresh(ctx); err != nil {
+				catalogMu.Unlock()
+				return nil, err
+			}
+			metas := store.Objects()
+			refreshed := make([]catalog.Entry, 0, len(metas))
+			for _, meta := range metas {
+				refreshed = append(refreshed, catalog.Entry{Name: meta.Name, Size: meta.Size})
+			}
+			remoteEntries = catalog.WithOriginBase(refreshed, originBase)
+			lastS3Refresh = time.Now()
 		}
-		metas := store.Objects()
-		ents := make([]catalog.Entry, 0, len(metas))
-		for _, m := range metas {
-			ents = append(ents, catalog.Entry{Name: m.Name, Size: m.Size})
-		}
-		return mergeEntries(liveEntries, catalog.WithOriginBase(ents, originBase)), nil
+		remote := append([]catalog.Entry(nil), remoteEntries...)
+		catalogMu.Unlock()
+		return mergeEntries(liveEntries, remote), nil
 	}
 
 	liveCtx, stopLive := context.WithCancel(context.Background())
