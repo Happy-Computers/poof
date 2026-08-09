@@ -3,7 +3,7 @@
 | Doc | Audience | Contents |
 |---|---|---|
 | [mvp-plan.md](mvp-plan.md) | Product / sequencing | Goal, constraints, build ladder, status |
-| [write-sync-edit-plan.md](write-sync-edit-plan.md) | Product / engineers | E → F → D flow and test gates |
+| [write-sync-edit-plan.md](write-sync-edit-plan.md) | Product / engineers | E → D → F flow and test gates |
 | [architecture.md](architecture.md) | Engineers | System map, repo layout, Linux vs Windows, read path |
 | [infinity-storage-mount.md](infinity-storage-mount.md) | Operators | Run mount on Linux and Windows |
 | [live-relay.md](live-relay.md) | Operators | Same-PC WSL2 ↔ Windows live-preview and S3-durability harness |

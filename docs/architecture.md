@@ -108,25 +108,29 @@ Portable Go packages must not import FUSE or WinFsp. Only `internal/mount/{linux
 Caps: 256 files, 4 active proxies, 16 inflight SPCH RPCs per client, Zig
 `MAX_CONNECTIONS=32`, 1 MiB × 512 cache, 8 MiB max range.
 
-## Planned live write path (E → F)
+## Planned write path (E → D → F)
 
 1. FUSE or WinFsp reserves a flat pathname before accepting bytes.
 2. Go writes accepted bytes to a bounded local ingest spool.
-3. The first bytes publish a `streaming` catalog entry and writer source generation.
+3. The first bytes publish a local `streaming` catalog entry.
 4. Go uploads fixed multipart parts to S3 in the background.
-5. Observer range reads route through an authenticated relay to the writer's available spool ranges.
-6. Requests for unwritten ranges wait within a deadline; they never return fabricated zeros.
-7. Close seals local ingest while background S3 completion continues.
-8. Verified S3 completion atomically routes new ranges to object storage.
-9. The writer retains its spool for a handoff grace period, then deletes it.
+5. The writer can reopen available spool ranges; requests for unwritten ranges wait within a
+   deadline and never return fabricated zeros.
+6. Close seals local ingest while background S3 completion continues.
+7. Verified S3 completion atomically routes new ranges to object storage.
+8. The writer retains its spool for a bounded local handoff grace period, then deletes it.
+9. D adds the random-write, truncate, atomic-rename, replacement, and local lease behavior needed
+   for one-machine NLE save and export operations.
+10. F adds Yave-issued bearer authorization, an account-owned catalog, and an outbound relay so
+    observers can read the writer's available ranges across devices.
 
-The API relay carries bounded requested ranges over outbound client connections, allowing devices
-behind NAT to communicate. It does not persist another full object. A direct authenticated LAN path
+The F relay carries bounded requested ranges over outbound client connections, allowing devices
+behind NAT to communicate. It does not persist another full object. A direct authorized LAN path
 may optimize the same source contract later.
 
-Zig remains the observer read cache. Go owns the ingest spool, live origin, multipart upload,
-backpressure, source handoff, and abort. S3 durability controls long-term authority but never gates
-initial cross-device visibility or preview.
+Zig remains the bounded read cache. Go owns the ingest spool, live origin, multipart upload,
+backpressure, source handoff, and abort. Edit and export never require a full local copy, but the
+cache and write staging use bounded local disk.
 
 Full state machine and gates: [`write-sync-edit-plan.md`](write-sync-edit-plan.md).
 
@@ -157,8 +161,9 @@ inside the private `infinity_storage_auth` schema on Supabase Postgres.
 1. **Windows RO mount** — done.
 2. **Native app + email/password auth** — scaffolded; database migration pending.
 3. **E writes** — bounded sequential multipart upload on Linux and Windows.
-4. **F shared library** — account-owned catalog and bidirectional cross-device visibility.
-5. **D edit** — NLE-specific random-write, rename, replacement, and lease behavior.
+4. **D edit** — NLE-specific random-write, rename, replacement, and local lease behavior.
+5. **F shared library** — Yave bearer authority, account-owned catalog, and bidirectional
+   cross-device visibility.
 
 ---
 

@@ -88,12 +88,13 @@ func (s *memoryStore) Abort(ctx context.Context) error { return nil }
 func newTestManager(t *testing.T, store Store) *Manager {
 	t.Helper()
 	manager, err := NewManager(Config{
-		SpoolDir:       t.TempDir(),
-		Store:          store,
-		MaxSpoolBytes:  64 * 1024 * 1024,
-		MaxFileBytes:   64 * 1024 * 1024,
-		RangeWait:      10 * time.Millisecond,
-		UploadAttempts: PartUploadAttempts,
+		SpoolDir:        t.TempDir(),
+		Store:           store,
+		MaxActiveWrites: 2,
+		MaxSpoolBytes:   64 * 1024 * 1024,
+		MaxFileBytes:    64 * 1024 * 1024,
+		RangeWait:       10 * time.Millisecond,
+		UploadAttempts:  PartUploadAttempts,
 	})
 	if err != nil {
 		t.Fatal(err)

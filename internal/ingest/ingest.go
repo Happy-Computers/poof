@@ -15,20 +15,21 @@ import (
 )
 
 const (
-	MaxActiveWrites    = 2
-	PartBytes          = 16 * 1024 * 1024
-	BuffersPerWrite    = 2
-	MaxBufferBytes     = 64 * 1024 * 1024
-	MaxSpoolBytes      = 64 * 1024 * 1024 * 1024
-	MaxPartsPerObject  = 4096
-	MaxFileBytes       = 64 * 1024 * 1024 * 1024
-	MaxPeerRangeBytes  = 8 * 1024 * 1024
-	MaxPeerRangeReads  = 8
-	UnwrittenRangeWait = 30 * time.Second
-	SourceHandoffGrace = 30 * time.Second
-	PartUploadAttempts = 3
-	MaxCatalogFiles    = 256
-	MaxBasenameBytes   = 255
+	MaxActiveWrites       = 8
+	MaxConcurrentUploads  = 2
+	PartBytes             = 16 * 1024 * 1024
+	BuffersPerWrite       = 2
+	MaxBufferBytes        = 64 * 1024 * 1024
+	MaxSpoolBytes         = 64 * 1024 * 1024 * 1024
+	MaxPartsPerObject     = 4096
+	MaxFileBytes          = 64 * 1024 * 1024 * 1024
+	MaxPeerRangeBytes     = 8 * 1024 * 1024
+	MaxPeerRangeReads     = 8
+	UnwrittenRangeWait    = 30 * time.Second
+	SourceHandoffGrace    = 30 * time.Second
+	PartUploadAttempts    = 3
+	MaxCatalogFiles       = 256
+	MaxBasenameBytes      = 255
 )
 
 var (
@@ -181,6 +182,10 @@ func NewManager(cfg Config) (*Manager, error) {
 	if uploadAttempts < 1 || uploadAttempts > PartUploadAttempts {
 		return nil, fmt.Errorf("ingest: UploadAttempts must be 1..%d", PartUploadAttempts)
 	}
+	uploadSlots := MaxConcurrentUploads
+	if uploadSlots > maxActiveWrites {
+		uploadSlots = maxActiveWrites
+	}
 	return &Manager{
 		spoolDir:        cfg.SpoolDir,
 		store:           cfg.Store,
@@ -192,7 +197,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		publish:         cfg.Publish,
 		logf:            cfg.Logf,
 		files:           make(map[string]*File),
-		uploadTokens:    make(chan struct{}, maxActiveWrites),
+		uploadTokens:    make(chan struct{}, uploadSlots),
 	}, nil
 }
 
@@ -202,8 +207,17 @@ func (m *Manager) Reserve(name string) (*File, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, exists := m.files[name]; exists {
-		return nil, ErrNameExists
+	if existing, exists := m.files[name]; exists {
+		existing.mu.Lock()
+		canReplace := existing.accepted == 0 && existing.closed &&
+			(existing.state == StateInterrupted || existing.state == StateAborted)
+		path := existing.path
+		existing.mu.Unlock()
+		if !canReplace {
+			return nil, ErrNameExists
+		}
+		delete(m.files, name)
+		_ = os.Remove(path)
 	}
 	if len(m.files) >= MaxCatalogFiles {
 		return nil, ErrCatalogFull
@@ -212,6 +226,7 @@ func (m *Manager) Reserve(name string) (*File, error) {
 		return nil, ErrActiveWriteLimit
 	}
 	path := filepath.Join(m.spoolDir, name)
+	_ = os.Remove(path)
 	spool, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
@@ -242,6 +257,18 @@ func (m *Manager) Reserve(name string) (*File, error) {
 	return file, nil
 }
 
+func (m *Manager) forgetLocked(file *File) {
+	if current, ok := m.files[file.name]; ok && current == file {
+		delete(m.files, file.name)
+	}
+}
+
+func (m *Manager) Forget(file *File) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.forgetLocked(file)
+}
+
 func (m *Manager) Lookup(name string) (*File, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -258,7 +285,8 @@ func (m *Manager) Entries() []catalog.Entry {
 	m.mu.Unlock()
 	entries := make([]catalog.Entry, 0, len(files))
 	for _, file := range files {
-		if file.Snapshot().State == StateDurable {
+		switch file.Snapshot().State {
+		case StateDurable, StateAborted, StateAborting, StateInterrupted:
 			continue
 		}
 		entries = append(entries, catalog.Entry{
@@ -425,6 +453,14 @@ func (f *File) Close() error {
 		f.active = false
 		f.manager.releaseWriteHandle()
 	}
+	if f.accepted == 0 {
+		f.state = StateAborted
+		f.releaseSpoolLocked()
+		f.changed.Broadcast()
+		f.manager.Forget(f)
+		f.manager.notify(f)
+		return nil
+	}
 	if err := f.spool.Sync(); err != nil {
 		f.changed.Broadcast()
 		return fmt.Errorf("ingest: sync spool: %w", err)
@@ -565,6 +601,7 @@ func (f *File) Abort(ctx context.Context) error {
 	f.changed.Broadcast()
 	f.manager.notify(f)
 	f.mu.Unlock()
+	f.manager.Forget(f)
 	return nil
 }
 
