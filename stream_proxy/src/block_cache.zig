@@ -1,8 +1,8 @@
 const std = @import("std");
 const Io = std.Io;
-const File = Io.File;
 const assert = std.debug.assert;
 const limits = @import("limits.zig");
+const origin_mod = @import("origin.zig");
 
 pub const Metrics = struct {
     bytes_from_origin: std.atomic.Value(u64) = .init(0),
@@ -22,21 +22,22 @@ const Slot = struct {
 
 pub const BlockCache = struct {
     io: Io,
-    file: File,
+    origin: origin_mod.Origin,
     object_size: u64,
     storage: []u8,
     slots: [limits.CACHE_BLOCKS]Slot,
     mutex: Io.Mutex = .init,
+    origin_sem: Io.Semaphore = .{ .permits = limits.MAX_CONCURRENT_ORIGIN_FILLS },
     clock: u64 = 1,
     cursor_block: u32 = 0,
     metrics: Metrics = .{},
 
-    pub fn init(io: Io, file: File, object_size: u64, storage: []u8) BlockCache {
+    pub fn init(io: Io, origin: origin_mod.Origin, object_size: u64, storage: []u8) BlockCache {
         assert(storage.len == @as(usize, limits.CACHE_BLOCKS) * limits.BLOCK_SIZE);
         assert(object_size > 0);
         return .{
             .io = io,
-            .file = file,
+            .origin = origin,
             .object_size = object_size,
             .storage = storage,
             .slots = .{Slot{}} ** limits.CACHE_BLOCKS,
@@ -77,8 +78,6 @@ pub const BlockCache = struct {
         assert(len > 0);
         assert(len <= limits.MAX_RANGE_BYTES);
 
-        // Never hold the cache mutex across network writes — a stalled client
-        // would otherwise freeze every other connection (VLC + curl).
         var offset = start;
         var scratch: [limits.BLOCK_SIZE]u8 = undefined;
         while (offset <= end_inclusive) {
@@ -90,14 +89,7 @@ pub const BlockCache = struct {
             assert(local_off <= local_end);
             const n = local_end - local_off + 1;
 
-            {
-                try self.mutex.lock(self.io);
-                defer self.mutex.unlock(self.io);
-                const block = try self.ensureBlockLocked(block_index);
-                assert(local_end < block.len);
-                @memcpy(scratch[0..n], block[local_off..][0..n]);
-            }
-
+            try self.copyFromBlock(block_index, local_off, scratch[0..n]);
             try out.writeAll(scratch[0..n]);
             _ = self.metrics.bytes_to_client.fetchAdd(n, .monotonic);
             if (want_end == end_inclusive) break;
@@ -112,19 +104,58 @@ pub const BlockCache = struct {
         }
     }
 
+    pub fn copyRangeToSlice(self: *BlockCache, start: u64, end_inclusive: u64, out: []u8) !usize {
+        assert(start <= end_inclusive);
+        assert(end_inclusive < self.object_size);
+        const len = end_inclusive - start + 1;
+        assert(len > 0);
+        assert(len <= limits.MAX_RANGE_BYTES);
+        assert(out.len >= len);
+
+        var offset = start;
+        var written: usize = 0;
+        while (offset <= end_inclusive) {
+            const block_index: u32 = @intCast(offset / limits.BLOCK_SIZE);
+            const block_start = @as(u64, block_index) * limits.BLOCK_SIZE;
+            const local_off: usize = @intCast(offset - block_start);
+            const want_end = @min(end_inclusive, block_start + self.blockLen(block_index) - 1);
+            const local_end: usize = @intCast(want_end - block_start);
+            assert(local_off <= local_end);
+            const n = local_end - local_off + 1;
+
+            try self.copyFromBlock(block_index, local_off, out[written..][0..n]);
+            written += n;
+            _ = self.metrics.bytes_to_client.fetchAdd(n, .monotonic);
+            if (want_end == end_inclusive) break;
+            offset = want_end + 1;
+        }
+        assert(written == len);
+
+        {
+            try self.mutex.lock(self.io);
+            defer self.mutex.unlock(self.io);
+            const end_block: u32 = @intCast(end_inclusive / limits.BLOCK_SIZE);
+            self.updateCursorLocked(end_block);
+        }
+        return written;
+    }
+
     pub fn prefetchAhead(self: *BlockCache) void {
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
+        const cursor = blk: {
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
+            break :blk self.cursor_block;
+        };
 
         const total = self.blockCount();
-        if (self.cursor_block + 1 >= total) return;
+        if (cursor + 1 >= total) return;
 
         var i: u32 = 1;
         while (i <= limits.PREFETCH_BLOCKS) : (i += 1) {
-            const bi = self.cursor_block + i;
+            const bi = cursor + i;
             if (bi >= total) break;
             const before_origin = self.metrics.bytes_from_origin.load(.monotonic);
-            _ = self.ensureBlockLocked(bi) catch {
+            self.ensureBlockPresent(bi) catch {
                 _ = self.metrics.prefetch_cancelled.fetchAdd(1, .monotonic);
                 return;
             };
@@ -142,20 +173,69 @@ pub const BlockCache = struct {
         self.cursor_block = end_block;
     }
 
-    fn ensureBlockLocked(self: *BlockCache, block_index: u32) ![]const u8 {
+    /// Copy `out.len` bytes from block at `local_off` into `out`.
+    /// Never holds the cache mutex across origin I/O.
+    fn copyFromBlock(self: *BlockCache, block_index: u32, local_off: usize, out: []u8) !void {
+        assert(out.len > 0);
+        try self.ensureBlockPresent(block_index);
+
+        try self.mutex.lock(self.io);
+        defer self.mutex.unlock(self.io);
+
+        const slot_i = self.findSlot(block_index) orelse return error.CacheInconsistent;
+        self.clock += 1;
+        self.slots[slot_i].last_used = self.clock;
+        const block = self.slotBytes(slot_i);
+        assert(local_off + out.len <= block.len);
+        @memcpy(out, block[local_off..][0..out.len]);
+    }
+
+    fn ensureBlockPresent(self: *BlockCache, block_index: u32) !void {
         assert(block_index < self.blockCount());
 
-        if (self.findSlot(block_index)) |slot_i| {
-            self.clock += 1;
-            self.slots[slot_i].last_used = self.clock;
-            _ = self.metrics.cache_hits.fetchAdd(1, .monotonic);
-            return self.slotBytes(slot_i);
+        {
+            try self.mutex.lock(self.io);
+            defer self.mutex.unlock(self.io);
+            if (self.findSlot(block_index) != null) {
+                _ = self.metrics.cache_hits.fetchAdd(1, .monotonic);
+                return;
+            }
+            _ = self.metrics.cache_misses.fetchAdd(1, .monotonic);
         }
 
-        _ = self.metrics.cache_misses.fetchAdd(1, .monotonic);
+        const want = self.blockLen(block_index);
+        var fill_buf: [limits.BLOCK_SIZE]u8 = undefined;
+        const dest = fill_buf[0..want];
+        const file_off = @as(u64, block_index) * limits.BLOCK_SIZE;
+
+        try self.origin_sem.wait(self.io);
+        defer self.origin_sem.post(self.io);
+        try self.origin.readBlock(file_off, dest);
+
+        try self.mutex.lock(self.io);
+        defer self.mutex.unlock(self.io);
+
+        // Another fiber may have filled this block while we fetched.
+        if (self.findSlot(block_index) != null) return;
+
         const slot_i = self.evictOrFreeSlot();
-        try self.fillSlot(slot_i, block_index);
-        return self.slotBytes(slot_i);
+        const slot_dest = self.storage[slot_i * limits.BLOCK_SIZE ..][0..want];
+        @memcpy(slot_dest, dest);
+        self.clock += 1;
+        self.slots[slot_i] = .{
+            .valid = true,
+            .block_index = block_index,
+            .last_used = self.clock,
+            .filled_len = want,
+        };
+        _ = self.metrics.bytes_from_origin.fetchAdd(want, .monotonic);
+
+        var occ: u32 = 0;
+        for (self.slots) |s| {
+            if (s.valid) occ += 1;
+        }
+        assert(occ <= limits.CACHE_BLOCKS);
+        assert(occ > 0);
     }
 
     fn findSlot(self: *BlockCache, block_index: u32) ?usize {
@@ -187,33 +267,6 @@ pub const BlockCache = struct {
         return lru_i;
     }
 
-    fn fillSlot(self: *BlockCache, slot_i: usize, block_index: u32) !void {
-        assert(slot_i < limits.CACHE_BLOCKS);
-        assert(block_index < self.blockCount());
-
-        const want = self.blockLen(block_index);
-        const dest = self.storage[slot_i * limits.BLOCK_SIZE ..][0..want];
-        const file_off = @as(u64, block_index) * limits.BLOCK_SIZE;
-        const got = try self.file.readPositionalAll(self.io, dest, file_off);
-        assert(got == want);
-
-        self.clock += 1;
-        self.slots[slot_i] = .{
-            .valid = true,
-            .block_index = block_index,
-            .last_used = self.clock,
-            .filled_len = want,
-        };
-        _ = self.metrics.bytes_from_origin.fetchAdd(want, .monotonic);
-
-        var occ: u32 = 0;
-        for (self.slots) |s| {
-            if (s.valid) occ += 1;
-        }
-        assert(occ <= limits.CACHE_BLOCKS);
-        assert(occ > 0);
-    }
-
     fn slotBytes(self: *BlockCache, slot_i: usize) []const u8 {
         const slot = self.slots[slot_i];
         assert(slot.valid);
@@ -225,10 +278,9 @@ pub const BlockCache = struct {
 
 test "block count edges" {
     var storage: [limits.BLOCK_SIZE]u8 = undefined;
-    // Only exercise size math; file/io unused.
     var cache = BlockCache{
         .io = undefined,
-        .file = undefined,
+        .origin = undefined,
         .object_size = limits.BLOCK_SIZE,
         .storage = storage[0..],
         .slots = .{Slot{}} ** limits.CACHE_BLOCKS,

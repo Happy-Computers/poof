@@ -1,0 +1,13 @@
+{
+  "name": "infinity-storage-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Infinity Storage native shell — mount cloud media as a local folder",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron . --no-sandbox"
+  },
+  "devDependencies": {
+    "electron": "^36.4.0"
+  }
+}

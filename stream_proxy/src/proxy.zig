@@ -1,15 +1,34 @@
 const std = @import("std");
-const http = std.http;
 const Io = std.Io;
 const net = Io.net;
 const assert = std.debug.assert;
 const limits = @import("limits.zig");
 const block_cache = @import("block_cache.zig");
+const protocol = @import("protocol.zig");
 
+/// Shared front-door state for HTTP + UDS.
 pub const State = struct {
     io: Io,
     cache: *block_cache.BlockCache,
     object_name: []const u8,
+    /// Basename shown in the mount (INFO op).
+    object_basename: []const u8,
+    active_connections: std.atomic.Value(u32) = .init(0),
+
+    pub fn tryAcquireConnection(self: *State) bool {
+        while (true) {
+            const n = self.active_connections.load(.monotonic);
+            if (n >= limits.MAX_CONNECTIONS) return false;
+            if (self.active_connections.cmpxchgWeak(n, n + 1, .monotonic, .monotonic) == null) {
+                return true;
+            }
+        }
+    }
+
+    pub fn releaseConnection(self: *State) void {
+        const prev = self.active_connections.fetchSub(1, .monotonic);
+        assert(prev > 0);
+    }
 };
 
 pub fn serveAddress(state: *State, port: u16) !void {
@@ -19,6 +38,7 @@ pub fn serveAddress(state: *State, port: u16) !void {
 
     var server = try address.listen(state.io, .{
         .reuse_address = true,
+        .kernel_backlog = limits.LISTEN_BACKLOG,
     });
     defer server.deinit(state.io);
 
@@ -41,7 +61,14 @@ pub fn serveAddress(state: *State, port: u16) !void {
                 continue;
             },
         };
+        if (!state.tryAcquireConnection()) {
+            var copy = stream;
+            copy.close(state.io);
+            std.log.warn("connection limit reached ({d}); dropped HTTP client", .{limits.MAX_CONNECTIONS});
+            continue;
+        }
         group.concurrent(state.io, handleConnection, .{ state, stream }) catch {
+            state.releaseConnection();
             var copy = stream;
             copy.close(state.io);
             std.log.err("failed to spawn connection handler", .{});
@@ -52,6 +79,7 @@ pub fn serveAddress(state: *State, port: u16) !void {
 fn handleConnection(state: *State, stream: net.Stream) void {
     const io = state.io;
     defer {
+        state.releaseConnection();
         var copy = stream;
         copy.close(io);
     }
@@ -60,7 +88,7 @@ fn handleConnection(state: *State, stream: net.Stream) void {
     var recv_buffer: [8192]u8 = undefined;
     var connection_reader = stream.reader(io, &recv_buffer);
     var connection_writer = stream.writer(io, &send_buffer);
-    var http_server: http.Server = .init(&connection_reader.interface, &connection_writer.interface);
+    var http_server: std.http.Server = .init(&connection_reader.interface, &connection_writer.interface);
 
     while (true) {
         var request = http_server.receiveHead() catch |err| switch (err) {
@@ -77,7 +105,7 @@ fn handleConnection(state: *State, stream: net.Stream) void {
     }
 }
 
-fn handleRequest(state: *State, request: *http.Server.Request) !void {
+fn handleRequest(state: *State, request: *std.http.Server.Request) !void {
     const path = pathOnly(request.head.target);
     const range_hdr = findHeader(request, "range");
     std.log.info("{s} {s} range={s}", .{
@@ -112,7 +140,7 @@ fn handleRequest(state: *State, request: *http.Server.Request) !void {
     }
 }
 
-fn respondHead(state: *State, request: *http.Server.Request) !void {
+fn respondHead(state: *State, request: *std.http.Server.Request) !void {
     var size_buf: [32]u8 = undefined;
     const size_text = try std.fmt.bufPrint(&size_buf, "{d}", .{state.cache.object_size});
     try request.respond("", .{
@@ -126,7 +154,7 @@ fn respondHead(state: *State, request: *http.Server.Request) !void {
     });
 }
 
-fn respondGet(state: *State, request: *http.Server.Request) !void {
+fn respondGet(state: *State, request: *std.http.Server.Request) !void {
     const range_header = findHeader(request, "range") orelse {
         try request.respond("Range header required\n", .{
             .status = .bad_request,
@@ -186,7 +214,7 @@ fn respondGet(state: *State, request: *http.Server.Request) !void {
     state.cache.prefetchAhead();
 }
 
-fn respondMetrics(state: *State, request: *http.Server.Request) !void {
+fn respondMetrics(state: *State, request: *std.http.Server.Request) !void {
     var buf: [512]u8 = undefined;
     const body = try std.fmt.bufPrint(&buf,
         \\bytes_from_origin {d}
@@ -197,6 +225,7 @@ fn respondMetrics(state: *State, request: *http.Server.Request) !void {
         \\prefetch_bytes {d}
         \\prefetch_cancelled {d}
         \\object_size {d}
+        \\active_connections {d}
         \\
     , .{
         state.cache.metrics.bytes_from_origin.load(.monotonic),
@@ -207,6 +236,7 @@ fn respondMetrics(state: *State, request: *http.Server.Request) !void {
         state.cache.metrics.prefetch_bytes.load(.monotonic),
         state.cache.metrics.prefetch_cancelled.load(.monotonic),
         state.cache.object_size,
+        state.active_connections.load(.monotonic),
     });
     try request.respond(body, .{
         .status = .ok,
@@ -263,7 +293,7 @@ fn parseBytesRange(header_value: []const u8, object_size: u64) error{InvalidRang
     return .{ .start = start, .end_inclusive = end_inclusive };
 }
 
-fn findHeader(request: *const http.Server.Request, name: []const u8) ?[]const u8 {
+fn findHeader(request: *const std.http.Server.Request, name: []const u8) ?[]const u8 {
     var it = request.iterateHeaders();
     while (it.next()) |h| {
         if (std.ascii.eqlIgnoreCase(h.name, name)) return h.value;
@@ -295,4 +325,9 @@ test "parse bytes range" {
 
     try std.testing.expectError(error.InvalidRange, parseBytesRange("bytes=0-10,11-20", 100));
     try std.testing.expectError(error.InvalidRange, parseBytesRange("bytes=100-200", 100));
+}
+
+// Silence unused import when tests only import this file via main.
+comptime {
+    _ = protocol;
 }

@@ -1,14 +1,55 @@
-cloud storage that connects like a hard drive
+# Infinity Storage — cloud folder that streams
 
-mounts to your desktop like an SSD, and streams the bytes your application needs, so a 200GB R3D timeline plays back the moment you double-click it, even if your laptop only has 50GB free. Every project change syncs in real time across your team, so everyone can work on the same timeline
+Mount cloud media as a local folder/drive. Apps open files normally; only touched byte ranges leave object storage. Local use stays a **bounded cache**, not a full library download.
 
-aspect:
-https://aspect.inc/use-cases/post-production
-https://www.ycombinator.com/launches/QTB-aspect-intelligent-media-storage-for-creative-teams
+## Docs
 
-skyglass:
-https://x.com/vesting_tv/status/2059663418391691579?s=20
-https://x.com/byjasonz/status/2052086084809736380?s=20
+| Doc | Contents |
+|---|---|
+| [`docs/README.md`](docs/README.md) | Doc index |
+| [`docs/mvp-plan.md`](docs/mvp-plan.md) | Goal, constraints, build ladder, current position |
+| [`docs/write-sync-edit-plan.md`](docs/write-sync-edit-plan.md) | E → F → D implementation and test plan |
+| [`docs/architecture.md`](docs/architecture.md) | System map, package layout, Linux vs Windows |
+| [`docs/infinity-storage-mount.md`](docs/infinity-storage-mount.md) | How to run the mount (Linux + Windows) |
+| [`docs/infinity-storage-desktop.md`](docs/infinity-storage-desktop.md) | Electron auth and mount shell |
+| [`docs/infinity-storage-api.md`](docs/infinity-storage-api.md) | Better Auth + Supabase Postgres API |
+| [`docs/s3-origin.md`](docs/s3-origin.md) | S3 range origin |
+| [`docs/stream_proxy.md`](docs/stream_proxy.md) | Zig cache / HTTP harness |
+| [`docs/spch.md`](docs/spch.md) | Go↔Zig binary cache protocol (UDS + TCP) |
+| [`TIGERSTYLE.md`](TIGERSTYLE.md) | Design / coding style |
 
-unimportant now
-> immediate things i notice, you need internet access for this to work - need to give users offline access?
+## Quick start (Linux)
+
+```bash
+cd stream_proxy && zig build && cd ..
+mkdir -p /tmp/infinity-storage
+go run ./cmd/infinity-storage-mount \
+  --mount /tmp/infinity-storage \
+  --bucket YOUR_BUCKET \
+  --proxy-bin ./stream_proxy/zig-out/bin/stream_proxy
+```
+
+## Quick start (Windows)
+
+Install [WinFsp](https://github.com/winfsp/winfsp/releases). Build `stream_proxy.exe` and `infinity-storage-mount.exe`, then:
+
+```powershell
+.\infinity-storage-mount.exe --mount Z: --bucket YOUR_BUCKET --proxy-bin .\stream_proxy.exe
+```
+
+Details and checklist: [`docs/infinity-storage-mount.md`](docs/infinity-storage-mount.md).
+
+## Stack
+
+- **Zig** — fixed block cache, prefetch, hard limits (`stream_proxy`)
+- **Go** — mount, S3 glue, proxy pool (`cmd/infinity-storage-mount`, `internal/…`)
+- **Electron** — thin desktop shell (`desktop/`)
+- **TypeScript** — separate Better Auth service (`api/`)
+- **Supabase Postgres** — private Better Auth schema
+- **Volume backends** — Linux FUSE, Windows WinFsp (cgofuse); macOS later
+
+## Status
+
+Multi-file S3 read mount works on **Linux** and **Windows**.  
+Electron auth and the Better Auth API are scaffolded. Next: live writer-served ranges while S3
+persists in the background (E → F), then edit-from-mount behavior (D). See mvp-plan.
