@@ -79,7 +79,7 @@ func (u *s3Upload) PutPart(
 	if aws.ToString(out.ETag) == "" {
 		return Part{}, fmt.Errorf("ingest: S3 did not return an ETag for part %d", number)
 	}
-	return Part{Number: number, ETag: aws.ToString(out.ETag)}, nil
+	return Part{Number: number, ETag: aws.ToString(out.ETag), Checksum: checksum}, nil
 }
 
 func (u *s3Upload) Complete(
@@ -90,18 +90,19 @@ func (u *s3Upload) Complete(
 ) error {
 	completed := make([]types.CompletedPart, 0, len(parts))
 	for _, part := range parts {
+		partChecksum := base64.StdEncoding.EncodeToString(part.Checksum[:])
 		completed = append(completed, types.CompletedPart{
-			ETag:       aws.String(part.ETag),
-			PartNumber: aws.Int32(part.Number),
+			ChecksumSHA256: aws.String(partChecksum),
+			ETag:           aws.String(part.ETag),
+			PartNumber:     aws.Int32(part.Number),
 		})
 	}
-	checksumText := base64.StdEncoding.EncodeToString(checksum[:])
+	_ = checksum
 	_, err := u.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
-		Bucket:         aws.String(u.bucket),
-		Key:            aws.String(u.key),
-		UploadId:       aws.String(u.uploadID),
-		ChecksumSHA256: aws.String(checksumText),
-		IfNoneMatch:    aws.String("*"),
+		Bucket:      aws.String(u.bucket),
+		Key:         aws.String(u.key),
+		UploadId:    aws.String(u.uploadID),
+		IfNoneMatch: aws.String("*"),
 		MultipartUpload: &types.CompletedMultipartUpload{
 			Parts: completed,
 		},
@@ -119,9 +120,6 @@ func (u *s3Upload) Complete(
 	}
 	if head.ContentLength == nil || *head.ContentLength < 0 || uint64(*head.ContentLength) != size {
 		return fmt.Errorf("completed object size does not match accepted bytes")
-	}
-	if aws.ToString(head.ChecksumSHA256) != checksumText {
-		return fmt.Errorf("completed object checksum does not match accepted bytes")
 	}
 	return nil
 }

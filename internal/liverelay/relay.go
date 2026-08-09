@@ -22,19 +22,23 @@ const (
 	MaxRanges     = 8
 	WriterWait    = 25 * time.Second
 	RangeWait     = 30 * time.Second
+
+	rangeErrorHeader      = "X-Infinity-Range-Error"
+	rangeUnavailableValue = "unavailable"
 )
 
 type Stream struct {
-	Name  string `json:"name"`
-	Size  uint64 `json:"size"`
-	State string `json:"state"`
+	Name     string `json:"name"`
+	Size     uint64 `json:"size"`
+	State    string `json:"state"`
+	WriterID string `json:"writer_id"`
 }
 
 type Server struct {
 	mu      sync.Mutex
 	token   string
 	streams map[string]map[string]Stream
-	queues  map[string]chan *ticket
+	queues  map[string]map[string]chan *ticket
 	pending map[string]*ticket
 }
 
@@ -65,7 +69,7 @@ func NewServer(token string) (*Server, error) {
 	return &Server{
 		token:   token,
 		streams: make(map[string]map[string]Stream),
-		queues:  make(map[string]chan *ticket),
+		queues:  make(map[string]map[string]chan *ticket),
 		pending: make(map[string]*ticket),
 	}, nil
 }
@@ -104,7 +108,7 @@ func (s *Server) serveStreams(response http.ResponseWriter, request *http.Reques
 			http.Error(response, "invalid stream", http.StatusBadRequest)
 			return
 		}
-		if stream.Name != parts[1] || !validName(stream.Name) || !validState(stream.State) {
+		if stream.Name != parts[1] || !validName(stream.Name) || !validName(stream.WriterID) || !validState(stream.State) {
 			http.Error(response, "invalid stream", http.StatusBadRequest)
 			return
 		}
@@ -142,7 +146,7 @@ func (s *Server) serveLive(response http.ResponseWriter, request *http.Request, 
 		http.Error(response, "range not satisfiable", http.StatusRequestedRangeNotSatisfiable)
 		return
 	}
-	content, err := s.requestRange(request.Context(), parts[0], parts[1], start, length)
+	content, err := s.requestRange(request.Context(), parts[0], stream.WriterID, parts[1], start, length)
 	if err != nil {
 		http.Error(response, "range unavailable", http.StatusServiceUnavailable)
 		return
@@ -156,8 +160,8 @@ func (s *Server) serveLive(response http.ResponseWriter, request *http.Request, 
 }
 
 func (s *Server) serveWriters(response http.ResponseWriter, request *http.Request, parts []string) {
-	if len(parts) == 2 && parts[1] == "next" && request.Method == http.MethodGet {
-		job, ok := s.next(request.Context(), parts[0])
+	if len(parts) == 3 && parts[2] == "next" && request.Method == http.MethodGet {
+		job, ok := s.next(request.Context(), parts[0], parts[1])
 		if !ok {
 			response.WriteHeader(http.StatusNoContent)
 			return
@@ -202,19 +206,22 @@ func (s *Server) publish(library string, stream Stream) {
 	if exists && (previous.State == "durable" || previous.State == "aborted") {
 		return
 	}
+	if exists && previous.WriterID != stream.WriterID {
+		return
+	}
 	if exists && previous.Size > stream.Size {
 		return
 	}
 	s.streams[library][stream.Name] = stream
 }
 
-func (s *Server) requestRange(ctx context.Context, library, name string, start, length uint64) ([]byte, error) {
+func (s *Server) requestRange(ctx context.Context, library, writerID, name string, start, length uint64) ([]byte, error) {
 	ticket, err := newTicket(name, start, length)
 	if err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
-	queue := s.queue(library)
+	queue := s.queue(library, writerID)
 	if len(s.pending) >= MaxRanges {
 		s.mu.Unlock()
 		return nil, errors.New("live relay: range limit reached")
@@ -243,9 +250,12 @@ func (s *Server) requestRange(ctx context.Context, library, name string, start, 
 	}
 }
 
-func (s *Server) next(ctx context.Context, library string) (rangeJob, bool) {
+func (s *Server) next(ctx context.Context, library, writerID string) (rangeJob, bool) {
+	if !validName(writerID) {
+		return rangeJob{}, false
+	}
 	s.mu.Lock()
-	queue := s.queue(library)
+	queue := s.queue(library, writerID)
 	s.mu.Unlock()
 	select {
 	case ticket := <-queue:
@@ -265,6 +275,15 @@ func (s *Server) complete(response http.ResponseWriter, request *http.Request, i
 		http.Error(response, "unknown range", http.StatusNotFound)
 		return
 	}
+	if request.Header.Get(rangeErrorHeader) == rangeUnavailableValue {
+		select {
+		case ticket.result <- rangeResult{err: "live relay: writer range unavailable"}:
+			response.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(response, "range no longer pending", http.StatusGone)
+		}
+		return
+	}
 	content, err := io.ReadAll(io.LimitReader(request.Body, int64(ticket.length)+1))
 	if err != nil || uint64(len(content)) != ticket.length {
 		http.Error(response, "invalid range response", http.StatusBadRequest)
@@ -278,11 +297,16 @@ func (s *Server) complete(response http.ResponseWriter, request *http.Request, i
 	}
 }
 
-func (s *Server) queue(library string) chan *ticket {
-	queue := s.queues[library]
+func (s *Server) queue(library, writerID string) chan *ticket {
+	queues := s.queues[library]
+	if queues == nil {
+		queues = make(map[string]chan *ticket)
+		s.queues[library] = queues
+	}
+	queue := queues[writerID]
 	if queue == nil {
 		queue = make(chan *ticket, MaxRanges)
-		s.queues[library] = queue
+		queues[writerID] = queue
 	}
 	return queue
 }

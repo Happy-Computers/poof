@@ -241,13 +241,13 @@ func (f *InfinityStorageFS) Release(p string, handleID uint64) int {
 func (f *InfinityStorageFS) Read(p string, buff []byte, offset int64, handleID uint64) int {
 	_ = p
 	if offset < 0 {
-		return 0
+		return -fuse.EINVAL
 	}
 	f.mu.Lock()
 	handle, ok := f.handles[handleID]
 	f.mu.Unlock()
 	if !ok || handle.source == nil {
-		return 0
+		return -fuse.EBADF
 	}
 	size := handle.size
 	if handle.live != nil {
@@ -263,7 +263,7 @@ func (f *InfinityStorageFS) Read(p string, buff []byte, offset int64, handleID u
 	}
 	got, err := handle.source.ReadAt(buff[:want], uint64(offset))
 	if err != nil {
-		return 0
+		return -fuse.EIO
 	}
 	return got
 }

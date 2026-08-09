@@ -25,7 +25,8 @@ func main() {
 	liveRelayURL := flag.String("live-relay-url", "", "authenticated live relay URL (--bucket mode)")
 	libraryID := flag.String("library-id", "", "live relay library ID (--bucket mode)")
 	relayTokenFile := flag.String("relay-token-file", "", "file containing the live relay bearer token (--bucket mode)")
-	debug := flag.Bool("debug", false, "lifecycle and filesystem debug logs")
+	debug := flag.Bool("debug", false, "lifecycle and ingest debug logs")
+	fuseDebug := flag.Bool("fuse-debug", false, "log every FUSE or WinFsp request")
 	metricsLogInterval := flag.Duration("metrics-log-interval", 0, "runtime metrics log interval, for example 1s (0 disables)")
 	flag.Parse()
 
@@ -61,6 +62,7 @@ func main() {
 	err := mount.Run(mount.Config{
 		MountPoint:      *mountPoint,
 		Debug:           *debug,
+		FuseDebug:       *fuseDebug,
 		MetricsInterval: *metricsLogInterval,
 		Bucket:          *bucket,
 		Prefix:          *prefix,

@@ -13,6 +13,7 @@ type memoryStore struct {
 	mu         sync.Mutex
 	begins     int
 	parts      [][]byte
+	checksums  [][sha256.Size]byte
 	partCalls  map[int32]int
 	failFirst  bool
 	completed  bool
@@ -47,7 +48,8 @@ func (s *memoryStore) PutPart(
 		return Part{}, errors.New("part checksum mismatch")
 	}
 	s.parts = append(s.parts, copied)
-	return Part{Number: number, ETag: "part"}, nil
+	s.checksums = append(s.checksums, checksum)
+	return Part{Number: number, ETag: "part", Checksum: checksum}, nil
 }
 
 func (s *memoryStore) Complete(
@@ -58,8 +60,14 @@ func (s *memoryStore) Complete(
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(parts) != len(s.parts) || len(parts) != len(s.checksums) {
+		return errors.New("part count mismatch")
+	}
 	content := make([]byte, 0, size)
-	for _, part := range s.parts {
+	for index, part := range s.parts {
+		if parts[index].Checksum != s.checksums[index] {
+			return errors.New("completed part checksum mismatch")
+		}
 		content = append(content, part...)
 	}
 	if uint64(len(content)) != size {

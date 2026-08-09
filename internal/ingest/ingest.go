@@ -56,8 +56,9 @@ const (
 )
 
 type Part struct {
-	Number int32
-	ETag   string
+	Number   int32
+	ETag     string
+	Checksum [sha256.Size]byte
 }
 
 type Upload interface {

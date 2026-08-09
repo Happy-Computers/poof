@@ -3,9 +3,12 @@ package liverelay
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -19,16 +22,18 @@ import (
 )
 
 type Config struct {
-	URL     string
-	Library string
-	Token   string
+	URL      string
+	Library  string
+	Token    string
+	WriterID string
 }
 
 type Client struct {
-	base    *url.URL
-	library string
-	token   string
-	http    *http.Client
+	base     *url.URL
+	library  string
+	token    string
+	writerID string
+	http     *http.Client
 
 	mu      sync.Mutex
 	sources map[string]*Source
@@ -51,12 +56,24 @@ func NewClient(cfg Config) (*Client, error) {
 	if !validName(cfg.Library) {
 		return nil, fmt.Errorf("live relay: invalid library")
 	}
+	writerID := cfg.WriterID
+	if writerID == "" {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return nil, fmt.Errorf("live relay: generate writer ID: %w", err)
+		}
+		writerID = hex.EncodeToString(random[:])
+	}
+	if !validName(writerID) {
+		return nil, fmt.Errorf("live relay: invalid writer ID")
+	}
 	return &Client{
-		base:    base,
-		library: cfg.Library,
-		token:   cfg.Token,
-		http:    &http.Client{Timeout: RangeWait + 5*time.Second},
-		sources: make(map[string]*Source),
+		base:     base,
+		library:  cfg.Library,
+		token:    cfg.Token,
+		writerID: writerID,
+		http:     &http.Client{Timeout: RangeWait + 5*time.Second},
+		sources:  make(map[string]*Source),
 	}, nil
 }
 
@@ -64,7 +81,7 @@ func (c *Client) Publish(ctx context.Context, snapshot ingest.Snapshot) error {
 	if snapshot.State == ingest.StateReserved {
 		return nil
 	}
-	stream := Stream{Name: snapshot.Name, Size: snapshot.Size, State: string(snapshot.State)}
+	stream := Stream{Name: snapshot.Name, Size: snapshot.Size, State: string(snapshot.State), WriterID: c.writerID}
 	body, err := json.Marshal(stream)
 	if err != nil {
 		return err
@@ -104,7 +121,7 @@ func (c *Client) Load(ctx context.Context) ([]catalog.Entry, error) {
 	}
 	entries := make([]catalog.Entry, 0, len(streams))
 	for _, stream := range streams {
-		if !validName(stream.Name) || stream.Size == 0 || !validState(stream.State) {
+		if !validName(stream.Name) || !validName(stream.WriterID) || stream.Size == 0 || !validState(stream.State) {
 			return nil, fmt.Errorf("live relay: invalid stream catalog entry")
 		}
 		c.mu.Lock()
@@ -141,18 +158,24 @@ func (c *Client) serveWriter(ctx context.Context, manager *ingest.Manager) {
 		}
 		file, found := manager.Lookup(job.Name)
 		if !found {
+			log.Printf("live relay writer missing name=%s start=%d length=%d", job.Name, job.Start, job.Length)
+			_ = c.respondUnavailable(ctx, job.ID)
 			continue
 		}
 		content := make([]byte, job.Length)
 		if _, err := file.ReadAt(content, job.Start); err != nil {
+			log.Printf("live relay writer unavailable name=%s start=%d length=%d error=%v", job.Name, job.Start, job.Length, err)
+			_ = c.respondUnavailable(ctx, job.ID)
 			continue
 		}
-		_ = c.respond(ctx, job.ID, content)
+		if err := c.respond(ctx, job.ID, content); err != nil {
+			log.Printf("live relay writer response name=%s start=%d length=%d error=%v", job.Name, job.Start, job.Length, err)
+		}
 	}
 }
 
 func (c *Client) next(ctx context.Context) (rangeJob, bool, error) {
-	request, err := c.request(ctx, http.MethodGet, "/v1/writers/"+escaped(c.library)+"/next", nil)
+	request, err := c.request(ctx, http.MethodGet, "/v1/writers/"+escaped(c.library)+"/"+escaped(c.writerID)+"/next", nil)
 	if err != nil {
 		return rangeJob{}, false, err
 	}
@@ -182,6 +205,23 @@ func (c *Client) respond(ctx context.Context, id string, content []byte) error {
 	if err != nil {
 		return err
 	}
+	response, err := c.http.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		return responseError(response)
+	}
+	return nil
+}
+
+func (c *Client) respondUnavailable(ctx context.Context, id string) error {
+	request, err := c.request(ctx, http.MethodPut, "/v1/writers/"+escaped(c.library)+"/ranges/"+escaped(id), nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set(rangeErrorHeader, rangeUnavailableValue)
 	response, err := c.http.Do(request)
 	if err != nil {
 		return err

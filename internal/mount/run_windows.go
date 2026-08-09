@@ -50,12 +50,10 @@ func Run(cfg Config) error {
 	}
 
 	host := fuse.NewFileSystemHost(storage)
-	if cfg.Debug {
-		host.SetCapCaseInsensitive(true)
-	}
+	host.SetCapCaseInsensitive(true)
 
 	opts := []string{}
-	if cfg.Debug {
+	if cfg.FuseDebug {
 		opts = append(opts, "-o", "debug")
 	}
 

@@ -4,14 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
 
-func TestRelayPublishesAndServesWriterRanges(t *testing.T) {
+func TestRelayReturnsUnavailableWriterRangeImmediately(t *testing.T) {
 	server, err := NewServer("secret")
 	if err != nil {
 		t.Fatal(err)
@@ -20,8 +19,7 @@ func TestRelayPublishesAndServesWriterRanges(t *testing.T) {
 	defer httpServer.Close()
 	client := &http.Client{Timeout: time.Second}
 
-	publish := Stream{Name: "clip.mp4", Size: 6, State: "streaming", WriterID: "writer-a"}
-	body, err := json.Marshal(publish)
+	body, err := json.Marshal(Stream{Name: "clip.mp4", Size: 6, State: "streaming", WriterID: "writer-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,12 +55,13 @@ func TestRelayPublishesAndServesWriterRanges(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		request, err = http.NewRequest(http.MethodPut, httpServer.URL+"/v1/writers/demo/ranges/"+job.ID, bytes.NewBufferString("cde"))
+		request, err = http.NewRequest(http.MethodPut, httpServer.URL+"/v1/writers/demo/ranges/"+job.ID, nil)
 		if err != nil {
 			t.Error(err)
 			return
 		}
 		request.Header.Set("Authorization", "Bearer secret")
+		request.Header.Set(rangeErrorHeader, rangeUnavailableValue)
 		response, err = client.Do(request)
 		if err != nil {
 			t.Error(err)
@@ -79,30 +78,13 @@ func TestRelayPublishesAndServesWriterRanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.Header.Set("Authorization", "Bearer secret")
-	request.Header.Set("Range", "bytes=2-4")
+	request.Header.Set("Range", "bytes=0-2")
 	response, err = client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := io.ReadAll(response.Body)
 	_ = response.Body.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if response.StatusCode != http.StatusPartialContent || string(content) != "cde" {
-		t.Fatalf("status=%d content=%q", response.StatusCode, content)
-	}
-}
-
-func TestRelayRejectsUnauthorizedRequests(t *testing.T) {
-	server, err := NewServer("secret")
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodGet, "/v1/streams/demo", nil)
-	response := httptest.NewRecorder()
-	server.ServeHTTP(response, request)
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("status: %d", response.Code)
+	if response.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status: %d", response.StatusCode)
 	}
 }

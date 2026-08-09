@@ -323,8 +323,14 @@ type pooledHandle struct {
 	release func()
 }
 
+type writableFile interface {
+	WriteAt(content []byte, offset uint64) (int, error)
+	Flush() error
+	Close() error
+}
+
 type writeHandle struct {
-	file *ingest.File
+	file writableFile
 }
 
 func (f *multiFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
@@ -400,7 +406,7 @@ func (h *writeHandle) Write(ctx context.Context, data []byte, off int64) (uint32
 }
 
 func (h *writeHandle) Flush(ctx context.Context) syscall.Errno {
-	return ingestErrno(h.file.Flush())
+	return ingestErrno(h.file.Close())
 }
 
 func (h *writeHandle) Fsync(ctx context.Context, flags uint32) syscall.Errno {

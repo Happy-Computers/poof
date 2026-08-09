@@ -11,7 +11,12 @@ stream_proxy/zig-out/
 .playwright-mcp/
 /infinity-storage-origin
 /infinity-storage-mount
+/infinity-storage-mount.exe
+/infinity-storage-relay
 .env
 .env.local
 .env*.bak
 docs/relay-token.local.md
+docs/relay-config.local.md
+scripts/*.local.ps1
+scripts/*.local.zsh

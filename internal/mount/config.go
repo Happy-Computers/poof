@@ -15,6 +15,7 @@ import "time"
 type Config struct {
 	MountPoint      string // Linux path (/tmp/infinity-storage) or Windows drive (Z:)
 	Debug           bool
+	FuseDebug       bool
 	MetricsInterval time.Duration
 
 	// Exactly one of Bucket, Dir, UDS must be set.

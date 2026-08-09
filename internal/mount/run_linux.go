@@ -39,9 +39,11 @@ func Run(cfg Config) error {
 	}
 
 	opts := &fs.Options{
+		UID: uint32(os.Getuid()),
+		GID: uint32(os.Getgid()),
 		MountOptions: fuse.MountOptions{
 			AllowOther: false,
-			Debug:      cfg.Debug,
+			Debug:      cfg.FuseDebug,
 			FsName:     "infinity-storage",
 			Name:       "infinity-storage",
 			Options:    []string{"default_permissions"},

@@ -46,3 +46,40 @@ func TestNewRootMultiLive(t *testing.T) {
 	}
 	root.Stop()
 }
+
+type recordingWritableFile struct {
+	closed  int
+	flushed int
+}
+
+func (f *recordingWritableFile) WriteAt(content []byte, offset uint64) (int, error) {
+	return len(content), nil
+}
+
+func (f *recordingWritableFile) Flush() error {
+	f.flushed++
+	return nil
+}
+
+func (f *recordingWritableFile) Close() error {
+	f.closed++
+	return nil
+}
+
+func TestWriteHandleSealsOnFlush(t *testing.T) {
+	file := &recordingWritableFile{}
+	handle := &writeHandle{file: file}
+
+	if errno := handle.Flush(context.Background()); errno != 0 {
+		t.Fatalf("flush errno: %v", errno)
+	}
+	if file.closed != 1 || file.flushed != 0 {
+		t.Fatalf("flush lifecycle: closed=%d flushed=%d", file.closed, file.flushed)
+	}
+	if errno := handle.Fsync(context.Background(), 0); errno != 0 {
+		t.Fatalf("fsync errno: %v", errno)
+	}
+	if file.closed != 1 || file.flushed != 1 {
+		t.Fatalf("fsync lifecycle: closed=%d flushed=%d", file.closed, file.flushed)
+	}
+}
