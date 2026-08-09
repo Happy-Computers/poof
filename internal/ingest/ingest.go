@@ -112,10 +112,11 @@ type Manager struct {
 }
 
 type File struct {
-	manager *Manager
-	name    string
-	path    string
-	spool   *os.File
+	manager       *Manager
+	name          string
+	path          string
+	spool         *os.File
+	spoolReleased bool
 
 	mu        sync.Mutex
 	changed   *sync.Cond
@@ -359,6 +360,24 @@ func (f *File) WriteAt(content []byte, offset uint64) (int, error) {
 	return n, nil
 }
 
+func (f *File) releaseSpoolLocked() {
+	if f.spoolReleased {
+		return
+	}
+	if f.spool != nil {
+		if err := f.spool.Close(); err != nil {
+			f.manager.log("ingest close spool error name=%s error=%v", f.name, err)
+		}
+		f.spool = nil
+	}
+	if err := os.Remove(f.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		f.manager.log("ingest remove spool error name=%s error=%v", f.name, err)
+		return
+	}
+	f.manager.releaseSpoolBytes(f.accepted)
+	f.spoolReleased = true
+}
+
 func (f *File) abortLocked() {
 	f.closed = true
 	if f.active {
@@ -375,6 +394,7 @@ func (f *File) abortLocked() {
 		f.mu.Lock()
 		if f.state == StateAborting {
 			f.state = StateAborted
+			f.releaseSpoolLocked()
 			f.changed.Broadcast()
 			f.manager.notify(f)
 		}
@@ -457,6 +477,9 @@ func (f *File) ReadAt(dest []byte, offset uint64) (int, error) {
 	}
 	spool := f.spool
 	f.mu.Unlock()
+	if spool == nil {
+		return 0, ErrRangeUnavailable
+	}
 	n, err := spool.ReadAt(dest, int64(offset))
 	if err != nil && !errors.Is(err, io.EOF) {
 		return n, fmt.Errorf("ingest: read spool: %w", err)
@@ -538,6 +561,7 @@ func (f *File) Abort(ctx context.Context) error {
 	}
 	f.mu.Lock()
 	f.state = StateAborted
+	f.releaseSpoolLocked()
 	f.changed.Broadcast()
 	f.manager.notify(f)
 	f.mu.Unlock()
@@ -618,6 +642,7 @@ func (f *File) runUpload() {
 	}
 	f.mu.Lock()
 	f.state = StateDurable
+	f.releaseSpoolLocked()
 	f.manager.log("ingest state name=%s state=%s size=%d", f.name, f.state, size)
 	f.changed.Broadcast()
 	f.manager.notify(f)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -136,6 +137,73 @@ func TestSequentialIngestUploadsPartsAndBecomesDurable(t *testing.T) {
 	}
 	if store.partCalls[1] != 2 {
 		t.Fatalf("first part calls: %d", store.partCalls[1])
+	}
+}
+
+func TestTerminalIngestReleasesSpool(t *testing.T) {
+	manager := newTestManager(t, &memoryStore{})
+	manager.maxSpoolBytes = 3
+	file, err := manager.Reserve("first.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte("abc"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := file.WaitDurable(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(file.path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("durable spool remains: %v", err)
+	}
+	manager.mu.Lock()
+	spoolBytes := manager.spoolBytes
+	manager.mu.Unlock()
+	if spoolBytes != 0 {
+		t.Fatalf("durable spool bytes=%d", spoolBytes)
+	}
+	second, err := manager.Reserve("second.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.WriteAt([]byte("abc"), 0); err != nil {
+		t.Fatalf("spool capacity was not released: %v", err)
+	}
+}
+
+func TestAbortedIngestReleasesSpool(t *testing.T) {
+	manager := newTestManager(t, &memoryStore{})
+	manager.maxSpoolBytes = 3
+	file, err := manager.Reserve("aborted.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte("abc"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Abort(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(file.path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("aborted spool remains: %v", err)
+	}
+	manager.mu.Lock()
+	spoolBytes := manager.spoolBytes
+	manager.mu.Unlock()
+	if spoolBytes != 0 {
+		t.Fatalf("aborted spool bytes=%d", spoolBytes)
+	}
+	second, err := manager.Reserve("second.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.WriteAt([]byte("abc"), 0); err != nil {
+		t.Fatalf("spool capacity was not released: %v", err)
 	}
 }
 
