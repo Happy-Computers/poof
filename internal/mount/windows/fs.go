@@ -219,6 +219,9 @@ func (f *InfinityStorageFS) openForWrite(name string) (int, uint64) {
 	f.mu.Unlock()
 	if exists {
 		if writer, ok := entry.Source.(*ingest.File); ok {
+			if err := writer.AddWriter(); err != nil {
+				return windowsIngestErrno(err), ^uint64(0)
+			}
 			return f.addHandle(&openHandle{writer: writer, source: writer, live: writer})
 		}
 		return -fuse.EEXIST, ^uint64(0)
@@ -336,7 +339,7 @@ func (f *InfinityStorageFS) Release(p string, handleID uint64) int {
 		name := handle.writer.Snapshot().Name
 		err := handle.writer.Close()
 		snap := handle.writer.Snapshot()
-		if snap.State == ingest.StateAborted || snap.Size == 0 {
+		if snap.State == ingest.StateAborted {
 			f.mu.Lock()
 			if entry, exists := f.entries[name]; exists {
 				if src, ok := entry.Source.(*ingest.File); ok && src == handle.writer {
