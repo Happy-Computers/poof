@@ -15,20 +15,21 @@ import (
 )
 
 const (
-	MaxActiveWrites    = 2
-	PartBytes          = 16 * 1024 * 1024
-	BuffersPerWrite    = 2
-	MaxBufferBytes     = 64 * 1024 * 1024
-	MaxSpoolBytes      = 64 * 1024 * 1024 * 1024
-	MaxPartsPerObject  = 4096
-	MaxFileBytes       = 64 * 1024 * 1024 * 1024
-	MaxPeerRangeBytes  = 8 * 1024 * 1024
-	MaxPeerRangeReads  = 8
-	UnwrittenRangeWait = 30 * time.Second
-	SourceHandoffGrace = 30 * time.Second
-	PartUploadAttempts = 3
-	MaxCatalogFiles    = 256
-	MaxBasenameBytes   = 255
+	MaxActiveWrites       = 8
+	MaxConcurrentUploads  = 2
+	PartBytes             = 16 * 1024 * 1024
+	BuffersPerWrite       = 2
+	MaxBufferBytes        = 64 * 1024 * 1024
+	MaxSpoolBytes         = 64 * 1024 * 1024 * 1024
+	MaxPartsPerObject     = 4096
+	MaxFileBytes          = 64 * 1024 * 1024 * 1024
+	MaxPeerRangeBytes     = 8 * 1024 * 1024
+	MaxPeerRangeReads     = 8
+	UnwrittenRangeWait    = 30 * time.Second
+	SourceHandoffGrace    = 30 * time.Second
+	PartUploadAttempts    = 3
+	MaxCatalogFiles       = 256
+	MaxBasenameBytes      = 255
 )
 
 var (
@@ -127,8 +128,10 @@ type File struct {
 	closed    bool
 	active    bool
 	started   bool
+	writers   int
 	upload    Upload
 	uploadErr error
+	pendingSpoolRelease uint64
 }
 
 type hashState struct {
@@ -181,6 +184,10 @@ func NewManager(cfg Config) (*Manager, error) {
 	if uploadAttempts < 1 || uploadAttempts > PartUploadAttempts {
 		return nil, fmt.Errorf("ingest: UploadAttempts must be 1..%d", PartUploadAttempts)
 	}
+	uploadSlots := MaxConcurrentUploads
+	if uploadSlots > maxActiveWrites {
+		uploadSlots = maxActiveWrites
+	}
 	return &Manager{
 		spoolDir:        cfg.SpoolDir,
 		store:           cfg.Store,
@@ -192,7 +199,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		publish:         cfg.Publish,
 		logf:            cfg.Logf,
 		files:           make(map[string]*File),
-		uploadTokens:    make(chan struct{}, maxActiveWrites),
+		uploadTokens:    make(chan struct{}, uploadSlots),
 	}, nil
 }
 
@@ -202,8 +209,17 @@ func (m *Manager) Reserve(name string) (*File, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, exists := m.files[name]; exists {
-		return nil, ErrNameExists
+	if existing, exists := m.files[name]; exists {
+		existing.mu.Lock()
+		canReplace := existing.accepted == 0 && existing.closed &&
+			(existing.state == StateInterrupted || existing.state == StateAborted)
+		path := existing.path
+		existing.mu.Unlock()
+		if !canReplace {
+			return nil, ErrNameExists
+		}
+		delete(m.files, name)
+		_ = os.Remove(path)
 	}
 	if len(m.files) >= MaxCatalogFiles {
 		return nil, ErrCatalogFull
@@ -212,6 +228,7 @@ func (m *Manager) Reserve(name string) (*File, error) {
 		return nil, ErrActiveWriteLimit
 	}
 	path := filepath.Join(m.spoolDir, name)
+	_ = os.Remove(path)
 	spool, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
@@ -227,6 +244,7 @@ func (m *Manager) Reserve(name string) (*File, error) {
 		spool:   spool,
 		state:   StateReserved,
 		active:  true,
+		writers: 1,
 		hash: hashState{
 			hash: h,
 			sum: func() [sha256.Size]byte {
@@ -240,6 +258,18 @@ func (m *Manager) Reserve(name string) (*File, error) {
 	m.files[name] = file
 	m.activeWrites++
 	return file, nil
+}
+
+func (m *Manager) forgetLocked(file *File) {
+	if current, ok := m.files[file.name]; ok && current == file {
+		delete(m.files, file.name)
+	}
+}
+
+func (m *Manager) Forget(file *File) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.forgetLocked(file)
 }
 
 func (m *Manager) Lookup(name string) (*File, bool) {
@@ -258,7 +288,8 @@ func (m *Manager) Entries() []catalog.Entry {
 	m.mu.Unlock()
 	entries := make([]catalog.Entry, 0, len(files))
 	for _, file := range files {
-		if file.Snapshot().State == StateDurable {
+		switch file.Snapshot().State {
+		case StateDurable, StateAborted, StateAborting, StateInterrupted:
 			continue
 		}
 		entries = append(entries, catalog.Entry{
@@ -314,27 +345,35 @@ func (m *Manager) releaseSpoolBytes(count uint64) {
 
 func (f *File) WriteAt(content []byte, offset uint64) (int, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.closed {
+		f.mu.Unlock()
 		return 0, ErrClosed
 	}
 	if offset != f.accepted {
-		f.abortLocked()
+		releaseHandle := f.abortLocked()
+		f.mu.Unlock()
+		if releaseHandle {
+			f.manager.releaseWriteHandle()
+		}
 		return 0, ErrNonSequential
 	}
 	if len(content) == 0 {
+		f.mu.Unlock()
 		return 0, nil
 	}
 	if uint64(len(content)) > f.manager.maxFileBytes-f.accepted {
+		f.mu.Unlock()
 		return 0, ErrFileTooLarge
 	}
 	if err := f.manager.reserveSpoolBytes(uint64(len(content))); err != nil {
+		f.mu.Unlock()
 		return 0, err
 	}
 	n, err := f.spool.WriteAt(content, int64(offset))
 	if n > 0 {
 		if _, hashErr := f.hash.hash.Write(content[:n]); hashErr != nil {
 			f.manager.releaseSpoolBytes(uint64(len(content) - n))
+			f.mu.Unlock()
 			return n, fmt.Errorf("ingest: hash accepted bytes: %w", hashErr)
 		}
 		f.accepted += uint64(n)
@@ -351,6 +390,7 @@ func (f *File) WriteAt(content []byte, offset uint64) (int, error) {
 	if n < len(content) {
 		f.manager.releaseSpoolBytes(uint64(len(content) - n))
 	}
+	f.mu.Unlock()
 	if err != nil {
 		return n, fmt.Errorf("ingest: write spool: %w", err)
 	}
@@ -374,15 +414,16 @@ func (f *File) releaseSpoolLocked() {
 		f.manager.log("ingest remove spool error name=%s error=%v", f.name, err)
 		return
 	}
-	f.manager.releaseSpoolBytes(f.accepted)
+	f.pendingSpoolRelease = f.accepted
 	f.spoolReleased = true
 }
 
-func (f *File) abortLocked() {
+func (f *File) abortLocked() (releaseHandle bool) {
 	f.closed = true
+	f.writers = 0
 	if f.active {
 		f.active = false
-		f.manager.releaseWriteHandle()
+		releaseHandle = true
 	}
 	f.state = StateAborting
 	upload := f.upload
@@ -392,14 +433,32 @@ func (f *File) abortLocked() {
 			_ = upload.Abort(context.Background())
 		}
 		f.mu.Lock()
+		var spoolRelease uint64
 		if f.state == StateAborting {
 			f.state = StateAborted
 			f.releaseSpoolLocked()
+			spoolRelease = f.pendingSpoolRelease
+			f.pendingSpoolRelease = 0
 			f.changed.Broadcast()
 			f.manager.notify(f)
 		}
 		f.mu.Unlock()
+		if spoolRelease > 0 {
+			f.manager.releaseSpoolBytes(spoolRelease)
+		}
+		f.manager.Forget(f)
 	}()
+	return releaseHandle
+}
+
+func (f *File) AddWriter() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return ErrClosed
+	}
+	f.writers++
+	return nil
 }
 
 func (f *File) Flush() error {
@@ -416,17 +475,45 @@ func (f *File) Flush() error {
 
 func (f *File) Close() error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.closed {
+		f.mu.Unlock()
 		return nil
 	}
+	if f.writers > 1 {
+		f.writers--
+		f.mu.Unlock()
+		return nil
+	}
+	f.writers = 0
 	f.closed = true
+	releaseHandle := false
 	if f.active {
 		f.active = false
-		f.manager.releaseWriteHandle()
+		releaseHandle = true
+	}
+	if f.accepted == 0 {
+		f.state = StateAborted
+		f.releaseSpoolLocked()
+		spoolRelease := f.pendingSpoolRelease
+		f.pendingSpoolRelease = 0
+		f.changed.Broadcast()
+		f.mu.Unlock()
+		if spoolRelease > 0 {
+			f.manager.releaseSpoolBytes(spoolRelease)
+		}
+		if releaseHandle {
+			f.manager.releaseWriteHandle()
+		}
+		f.manager.Forget(f)
+		f.manager.notify(f)
+		return nil
 	}
 	if err := f.spool.Sync(); err != nil {
 		f.changed.Broadcast()
+		f.mu.Unlock()
+		if releaseHandle {
+			f.manager.releaseWriteHandle()
+		}
 		return fmt.Errorf("ingest: sync spool: %w", err)
 	}
 	if f.state == StateReserved {
@@ -436,6 +523,10 @@ func (f *File) Close() error {
 	}
 	f.manager.log("ingest state name=%s state=%s accepted=%d", f.name, f.state, f.accepted)
 	f.changed.Broadcast()
+	f.mu.Unlock()
+	if releaseHandle {
+		f.manager.releaseWriteHandle()
+	}
 	f.manager.notify(f)
 	return nil
 }
@@ -546,14 +637,19 @@ func (f *File) Abort(ctx context.Context) error {
 		return nil
 	}
 	f.closed = true
+	f.writers = 0
+	releaseHandle := false
 	if f.active {
 		f.active = false
-		f.manager.releaseWriteHandle()
+		releaseHandle = true
 	}
 	f.state = StateAborting
 	upload := f.upload
 	f.changed.Broadcast()
 	f.mu.Unlock()
+	if releaseHandle {
+		f.manager.releaseWriteHandle()
+	}
 	if upload != nil {
 		if err := upload.Abort(ctx); err != nil {
 			return fmt.Errorf("ingest: abort multipart upload: %w", err)
@@ -562,9 +658,15 @@ func (f *File) Abort(ctx context.Context) error {
 	f.mu.Lock()
 	f.state = StateAborted
 	f.releaseSpoolLocked()
+	spoolRelease := f.pendingSpoolRelease
+	f.pendingSpoolRelease = 0
 	f.changed.Broadcast()
 	f.manager.notify(f)
 	f.mu.Unlock()
+	if spoolRelease > 0 {
+		f.manager.releaseSpoolBytes(spoolRelease)
+	}
+	f.manager.Forget(f)
 	return nil
 }
 
@@ -643,10 +745,15 @@ func (f *File) runUpload() {
 	f.mu.Lock()
 	f.state = StateDurable
 	f.releaseSpoolLocked()
+	spoolRelease := f.pendingSpoolRelease
+	f.pendingSpoolRelease = 0
 	f.manager.log("ingest state name=%s state=%s size=%d", f.name, f.state, size)
 	f.changed.Broadcast()
 	f.manager.notify(f)
 	f.mu.Unlock()
+	if spoolRelease > 0 {
+		f.manager.releaseSpoolBytes(spoolRelease)
+	}
 }
 
 func (f *File) waitPart(offset uint64) (count int, done bool, err error) {

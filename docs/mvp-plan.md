@@ -129,33 +129,36 @@ Detailed design and test gates: [`write-sync-edit-plan.md`](write-sync-edit-plan
 - Docs: [`infinity-storage-desktop.md`](infinity-storage-desktop.md).
 
 #### E — Bounded write into Infinity Storage
-**Win:** Copy a new file into either mount; peers serve it while S3 persists it in the background.
+**Win:** Copy a new file into either mount, reopen it, and preview its accepted ranges while S3
+persists it in the background.
 
 - Go retains accepted bytes in a bounded active-ingest spool and uploads fixed multipart parts.
 - The writer serves available ranges before S3 completion.
 - Unwritten ranges wait within a deadline and never return fabricated zeros.
 - New flat files only; overwrite, rename, random writes, and directories wait for D.
-- Linux and Windows pass write, peer-range, reopen, hash, crash, and network-failure gates.
-- The first harness uses manually configured credentials and source routing.
+- Linux and Windows pass write, reopen, hash, crash, and network-failure gates.
+- The first harness uses one local development library and manually configured credentials.
 
-#### F — Account-owned shared library + second device
+#### D — Edit from the mount (proxies OK)
+**Win:** Resolve or Premiere opens, scrubs, saves, and exports proxy/compressed media through `Z:`
+or the Linux mount without a full local copy.
+
+- Add observed NLE semantics: random writes, truncate, temp-file rename, replacement, and local leases.
+- Invalidate cached versions explicitly; fail a competing local writer explicitly.
+- Cache and write staging remain bounded; the product never claims zero disk bytes.
+- Camera RAW and large ProRes remain outside the first D proof.
+
+#### F — Yave-authorized shared library + second device
 **Win:** As soon as a drag starts writing bytes, the file appears on the other mount and previews
 from the writer while S3 upload continues in the background.
 
-- Better Auth runs on Supabase Postgres through `infinity-storage-api`.
-- Postgres owns libraries, source state, upload reservations, conflicts, and catalog generations.
-- The API gives Go short-lived storage authority; permanent AWS credentials leave the clients.
-- An authenticated relay routes observer ranges to the writer through NAT.
+- Yave issues short-lived bearer tokens scoped to the user, library, device, expiry, and operation.
+- The storage engine verifies those tokens and has no separate login or account service.
+- The shared catalog owns source state, upload reservations, conflicts, and catalog generations.
+- An authorized relay routes observer ranges to the writer through NAT.
 - Linux writes one file and Windows previews it before S3 completion, then the direction reverses.
 - Verified S3 completion atomically moves range authority from the writer to object storage.
 - Discovery p95 targets below 1 second; peer preview targets below 2 seconds when ranges exist.
-
-#### D — Edit from the mount (proxies OK)
-**Win:** Resolve or Premiere opens, scrubs, and saves proxy/compressed media through the mount.
-
-- Add observed NLE semantics: random writes, truncate, temp-file rename, replacement, and leases.
-- Invalidate cached versions explicitly; never silently accept conflicting writers.
-- Camera RAW and large ProRes remain outside the first D proof.
 
 ### Parallel / as needed
 
@@ -177,9 +180,9 @@ from the writer while S3 upload continues in the background.
 | Multi-file Infinity Storage | Done (S3 live catalog) |
 | Windows RO mount | Done (WinFsp/cgofuse + TCP SPCH) |
 | Native app | Done (Electron email/password + mount shell) |
-| E | **Next** — bounded ingest spool, live peer ranges, and background S3 upload |
-| F | Auth scaffolded; add account-owned rendezvous, relay, and source generations |
-| D | After E durability and F cross-device visibility pass |
+| E | **Next** — bounded ingest spool, local live ranges, and background S3 upload |
+| D | After E durability; prove one-machine NLE edit and export through the mount |
+| F | After D; wire Yave bearer authority, account-owned rendezvous, relay, and source generations |
 | C | Opportunistic |
 
 **Next implementation slice:** build the bounded Go ingest spool plus multipart uploader and live
@@ -197,14 +200,17 @@ range origin, then connect Linux FUSE and Windows WinFsp create/write/flush/rele
   • bounded active-ingest spool
   • S3 multipart upload in background
   • live range origin until durable
-        │ authenticated range relay
+        │ local available ranges
         ▼
-[Observer mount — Go → Zig cache]
-  • streams only requested available ranges
+[Same mount — Go → Zig cache]
+  • reopens only requested available ranges
 
 After verified S3 completion:
 
-[Observer mount — Go → Zig cache] → range GET → [Object storage]
+[Same mount — Go → Zig cache] → range GET → [Object storage]
+
+F later adds the Yave-authorized relay and observer mount; it does not change the bounded local
+cache or staging rule.
 ```
 
 Step A proved the Zig **read** path over HTTP.

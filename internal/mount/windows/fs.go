@@ -111,10 +111,30 @@ func (f *InfinityStorageFS) Destroy() {
 	f.FileSystemBase.Destroy()
 }
 
+func fillOwner(stat *fuse.Stat_t) {
+	uid, gid, _ := fuse.Getcontext()
+	stat.Uid = uid
+	stat.Gid = gid
+}
+
+func (f *InfinityStorageFS) Access(p string, mask uint32) int {
+	_ = p
+	_ = mask
+	return 0
+}
+
+func (f *InfinityStorageFS) Utimens(p string, tmsp []fuse.Timespec) int {
+	_ = p
+	_ = tmsp
+	return 0
+}
+
 func (f *InfinityStorageFS) Getattr(p string, stat *fuse.Stat_t, fh uint64) int {
+	_ = fh
 	p = cleanPath(p)
 	if p == "/" {
-		stat.Mode = fuse.S_IFDIR | 0755
+		stat.Mode = fuse.S_IFDIR | 0777
+		fillOwner(stat)
 		return 0
 	}
 	name := strings.TrimPrefix(p, "/")
@@ -127,6 +147,7 @@ func (f *InfinityStorageFS) Getattr(p string, stat *fuse.Stat_t, fh uint64) int 
 		}
 		stat.Mode = fuse.S_IFREG | 0444
 		stat.Size = int64(f.singleSize)
+		fillOwner(stat)
 		return 0
 	}
 	f.maybeRefresh()
@@ -139,26 +160,34 @@ func (f *InfinityStorageFS) Getattr(p string, stat *fuse.Stat_t, fh uint64) int 
 	stat.Mode = fuse.S_IFREG | 0444
 	stat.Size = int64(entry.Size)
 	if entry.Source != nil {
-		stat.Mode = fuse.S_IFREG | 0644
+		stat.Mode = fuse.S_IFREG | 0666
 		stat.Size = int64(entry.Source.Size())
 	}
+	fillOwner(stat)
 	return 0
 }
 
 func (f *InfinityStorageFS) Open(p string, flags int) (int, uint64) {
-	if flags&3 != 0 {
-		return -fuse.EROFS, ^uint64(0)
-	}
+	wantWrite := flags&3 != 0
 	p = cleanPath(p)
 	name := strings.TrimPrefix(p, "/")
 	if name == "" || strings.Contains(name, "/") {
+		if wantWrite {
+			return -fuse.EINVAL, ^uint64(0)
+		}
 		return -fuse.ENOENT, ^uint64(0)
 	}
 	if f.single != nil {
+		if wantWrite {
+			return -fuse.EROFS, ^uint64(0)
+		}
 		if name != f.singleName {
 			return -fuse.ENOENT, ^uint64(0)
 		}
 		return f.addHandle(&openHandle{source: f.single, size: f.singleSize})
+	}
+	if wantWrite {
+		return f.openForWrite(name)
 	}
 	f.maybeRefresh()
 	f.mu.Lock()
@@ -178,6 +207,36 @@ func (f *InfinityStorageFS) Open(p string, flags int) (int, uint64) {
 		return -fuse.EIO, ^uint64(0)
 	}
 	return f.addHandle(&openHandle{source: client, release: release, size: entry.Size})
+}
+
+func (f *InfinityStorageFS) openForWrite(name string) (int, uint64) {
+	if f.ingest == nil {
+		return -fuse.EROFS, ^uint64(0)
+	}
+	f.maybeRefresh()
+	f.mu.Lock()
+	entry, exists := f.entries[name]
+	f.mu.Unlock()
+	if exists {
+		if writer, ok := entry.Source.(*ingest.File); ok {
+			if err := writer.AddWriter(); err != nil {
+				return windowsIngestErrno(err), ^uint64(0)
+			}
+			return f.addHandle(&openHandle{writer: writer, source: writer, live: writer})
+		}
+		return -fuse.EEXIST, ^uint64(0)
+	}
+	file, err := f.ingest.Reserve(name)
+	if err != nil {
+		return windowsIngestErrno(err), ^uint64(0)
+	}
+	f.mu.Lock()
+	f.entries[name] = catalog.Entry{Name: name, Source: file}
+	handleID := f.nextHandle
+	f.nextHandle++
+	f.handles[handleID] = &openHandle{writer: file, source: file, live: file}
+	f.mu.Unlock()
+	return 0, handleID
 }
 
 func (f *InfinityStorageFS) addHandle(handle *openHandle) (int, uint64) {
@@ -200,10 +259,22 @@ func (f *InfinityStorageFS) Create(p string, flags int, mode uint32) (int, uint6
 		return -fuse.EINVAL, ^uint64(0)
 	}
 	f.mu.Lock()
-	_, exists := f.entries[name]
+	entry, exists := f.entries[name]
 	f.mu.Unlock()
 	if exists {
-		return -fuse.EEXIST, ^uint64(0)
+		if writer, ok := entry.Source.(*ingest.File); ok {
+			snap := writer.Snapshot()
+			if snap.Size == 0 && (snap.State == ingest.StateInterrupted || snap.State == ingest.StateAborted) {
+				_ = writer.Abort(context.Background())
+				f.mu.Lock()
+				delete(f.entries, name)
+				f.mu.Unlock()
+			} else {
+				return -fuse.EEXIST, ^uint64(0)
+			}
+		} else {
+			return -fuse.EEXIST, ^uint64(0)
+		}
 	}
 	file, err := f.ingest.Reserve(name)
 	if err != nil {
@@ -213,9 +284,41 @@ func (f *InfinityStorageFS) Create(p string, flags int, mode uint32) (int, uint6
 	f.entries[name] = catalog.Entry{Name: name, Source: file}
 	handleID := f.nextHandle
 	f.nextHandle++
-	f.handles[handleID] = &openHandle{writer: file}
+	f.handles[handleID] = &openHandle{writer: file, source: file, live: file}
 	f.mu.Unlock()
 	return 0, handleID
+}
+
+func (f *InfinityStorageFS) Unlink(p string) int {
+	if f.ingest == nil {
+		return -fuse.EROFS
+	}
+	name := strings.TrimPrefix(cleanPath(p), "/")
+	if name == "" || strings.Contains(name, "/") {
+		return -fuse.EINVAL
+	}
+	f.mu.Lock()
+	entry, exists := f.entries[name]
+	f.mu.Unlock()
+	if !exists {
+		if file, ok := f.ingest.Lookup(name); ok {
+			if err := file.Abort(context.Background()); err != nil {
+				return windowsIngestErrno(err)
+			}
+			return 0
+		}
+		return -fuse.ENOENT
+	}
+	if writer, ok := entry.Source.(*ingest.File); ok {
+		if err := writer.Abort(context.Background()); err != nil {
+			return windowsIngestErrno(err)
+		}
+		f.mu.Lock()
+		delete(f.entries, name)
+		f.mu.Unlock()
+		return 0
+	}
+	return -fuse.EROFS
 }
 
 func (f *InfinityStorageFS) Release(p string, handleID uint64) int {
@@ -233,7 +336,19 @@ func (f *InfinityStorageFS) Release(p string, handleID uint64) int {
 		handle.release()
 	}
 	if handle.writer != nil {
-		return windowsIngestErrno(handle.writer.Close())
+		name := handle.writer.Snapshot().Name
+		err := handle.writer.Close()
+		snap := handle.writer.Snapshot()
+		if snap.State == ingest.StateAborted {
+			f.mu.Lock()
+			if entry, exists := f.entries[name]; exists {
+				if src, ok := entry.Source.(*ingest.File); ok && src == handle.writer {
+					delete(f.entries, name)
+				}
+			}
+			f.mu.Unlock()
+		}
+		return windowsIngestErrno(err)
 	}
 	return 0
 }
@@ -284,6 +399,45 @@ func (f *InfinityStorageFS) Write(p string, buff []byte, offset int64, handleID 
 		return windowsIngestErrno(err)
 	}
 	return written
+}
+
+func (f *InfinityStorageFS) Truncate(p string, size int64, handleID uint64) int {
+	if size < 0 {
+		return -fuse.EINVAL
+	}
+	var writer *ingest.File
+	if handleID != 0 && handleID != ^uint64(0) {
+		f.mu.Lock()
+		handle, ok := f.handles[handleID]
+		f.mu.Unlock()
+		if !ok || handle.writer == nil {
+			return -fuse.EBADF
+		}
+		writer = handle.writer
+	} else {
+		name := strings.TrimPrefix(cleanPath(p), "/")
+		if name == "" || strings.Contains(name, "/") {
+			return -fuse.EINVAL
+		}
+		f.mu.Lock()
+		entry, ok := f.entries[name]
+		f.mu.Unlock()
+		if !ok {
+			return -fuse.ENOENT
+		}
+		writer, ok = entry.Source.(*ingest.File)
+		if !ok {
+			return -fuse.EROFS
+		}
+	}
+	accepted := writer.Size()
+	if uint64(size) == accepted {
+		return 0
+	}
+	if accepted == 0 && size == 0 {
+		return 0
+	}
+	return -fuse.EINVAL
 }
 
 func (f *InfinityStorageFS) Flush(p string, handleID uint64) int {

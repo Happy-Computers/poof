@@ -88,12 +88,13 @@ func (s *memoryStore) Abort(ctx context.Context) error { return nil }
 func newTestManager(t *testing.T, store Store) *Manager {
 	t.Helper()
 	manager, err := NewManager(Config{
-		SpoolDir:       t.TempDir(),
-		Store:          store,
-		MaxSpoolBytes:  64 * 1024 * 1024,
-		MaxFileBytes:   64 * 1024 * 1024,
-		RangeWait:      10 * time.Millisecond,
-		UploadAttempts: PartUploadAttempts,
+		SpoolDir:        t.TempDir(),
+		Store:           store,
+		MaxActiveWrites: 2,
+		MaxSpoolBytes:   64 * 1024 * 1024,
+		MaxFileBytes:    64 * 1024 * 1024,
+		RangeWait:       10 * time.Millisecond,
+		UploadAttempts:  PartUploadAttempts,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -301,5 +302,96 @@ func TestCloseMakesUnwrittenRangesUnavailable(t *testing.T) {
 	}
 	if _, err := file.ReadAt(make([]byte, 1), 3); !errors.Is(err, ErrRangeUnavailable) {
 		t.Fatalf("unavailable range: %v", err)
+	}
+}
+
+func TestEmptyCloseAllowsReserveWithoutDeadlock(t *testing.T) {
+	manager := newTestManager(t, &memoryStore{})
+	first, err := manager.Reserve("clip.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- first.Close()
+	}()
+	deadline := time.After(2 * time.Second)
+	for {
+		second, err := manager.Reserve("clip.mp4")
+		if err == nil {
+			if closeErr := <-done; closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			if err := second.Close(); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		if !errors.Is(err, ErrNameExists) {
+			t.Fatalf("reserve after empty close: %v", err)
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for empty close to free pathname")
+		case closeErr := <-done:
+			if closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			second, err := manager.Reserve("clip.mp4")
+			if err != nil {
+				t.Fatalf("reserve after empty close finished: %v", err)
+			}
+			if err := second.Close(); err != nil {
+				t.Fatal(err)
+			}
+			return
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+func TestSharedWritersSurvivePartialClose(t *testing.T) {
+	manager := newTestManager(t, &memoryStore{})
+	file, err := manager.Reserve("clip.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.AddWriter(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte("abc"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte("def"), 3); err != nil {
+		t.Fatalf("write after first handle close: %v", err)
+	}
+	if err := file.Flush(); err != nil {
+		t.Fatalf("flush after first handle close: %v", err)
+	}
+	if snap := file.Snapshot(); snap.State != StateStreaming {
+		t.Fatalf("live state after partial close: %s", snap.State)
+	}
+	empty, err := manager.Reserve("empty.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := empty.AddWriter(); err != nil {
+		t.Fatal(err)
+	}
+	if err := empty.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if snap := empty.Snapshot(); snap.State != StateReserved || snap.Size != 0 {
+		t.Fatalf("empty shared file after partial close: %+v", snap)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte("x"), 6); !errors.Is(err, ErrClosed) {
+		t.Fatalf("write after final close: %v", err)
 	}
 }
