@@ -1,0 +1,12 @@
+{
+  "collections": [
+    {
+      "name": "core",
+      "path": "$ODIN_ROOT/core"
+    },
+    {
+      "name": "vendor",
+      "path": "$ODIN_ROOT/vendor"
+    }
+  ]
+}

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>infinite storage engine: until i come up with a better name</title>
+  <style>
+    body {
+      font-family:'Lucida Console', monospace;
+      font-size: 18px;
+      color: #111;
+      background-color: white;
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 0 50px;
+      box-sizing: border-box;
+    }
+    .landing {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height:100vh; min-height:100dvh;
+      text-align: center;
+    }
+    .ascii-logo {
+      display: block;
+      width: max-content;
+      max-width: 100%;
+      margin: 0 auto;
+      font-family: 'Lucida Console', monospace;
+      font-size: clamp(2px, 0.52vw, 7px);
+      line-height: 1.05;
+      letter-spacing: 0;
+      white-space: pre;
+      overflow-x: auto;
+      text-align: left;
+      user-select: none;
+    }
+    .separator { letter-spacing: -9px; }
+    hr { border: none; height: 2px; background-color: lightgrey; width: 100%; margin: 30px auto; }
+    table { border-collapse: collapse; text-align: center; width: 100%; }
+    td {
+      padding: 5px 20px;
+      border: 1px solid #dddddd;
+    }
+    .quiet, .links-container a { color: inherit; }
+    .links-container { font-size: 24px; margin: 20px; }
+    .links-container a { text-decoration: none; margin: 0 10px; }
+    .product-photo { display: block; max-height: 640px; margin: 0 auto; }
+    .faqtable dt { margin-bottom: 0.75em; font-style: italic; }
+    .faqtable dd { margin-left: 0; margin-bottom: 2em; }
+  </style>
+</head>
+<body>
+  <div class="landing">
+    <pre class="ascii-logo" aria-label="infinity">
+                                @@@@@@@@@@@@@@@                                                                             @@@@@@@@@@@@@@@@                            
+                         @@@@@@@@@@@@@@@@@@@@@@@@@@@                                                                @@@@@@@@@@@@@@@@@@@@@@@@@@@@@                       
+                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                       @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                   
+                 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                
+              @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                          @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@             
+            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                      @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@           
+           @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@         
+         @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                             @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@        
+       @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@       
+      @@@@@@@@@@@@@@@@@@@@@@@@@@             @@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@              @@@@@@@@@@@@@@@@@@@@@@@@@@     
+     @@@@@@@@@@@@@@@@@@@@@@@                      @@@@@@@@@@@@@@@@@@@@@@@@@@                @@@@@@@@@@@@@@@@@@@@@@@@@@                       @@@@@@@@@@@@@@@@@@@@@@@    
+    @@@@@@@@@@@@@@@@@@@@@                             @@@@@@@@@@@@@@@@@@@@@@@@            @@@@@@@@@@@@@@@@@@@@@@@@@                             @@@@@@@@@@@@@@@@@@@@    
+   @@@@@@@@@@@@@@@@@@@@                                  @@@@@@@@@@@@@@@@@@@@@@@         @@@@@@@@@@@@@@@@@@@@@@                                  @@@@@@@@@@@@@@@@@@@@   
+  @@@@@@@@@@@@@@@@@@@                                      @@@@@@@@@@@@@@@@@@@@@@      @@@@@@@@@@@@@@@@@@@@@@                                      @@@@@@@@@@@@@@@@@@@  
+  @@@@@@@@@@@@@@@@@@                                         @@@@@@@@@@@@@@@@@@@@@@  @@@@@@@@@@@@@@@@@@@@@@                                         @@@@@@@@@@@@@@@@@@  
+ @@@@@@@@@@@@@@@@@@                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                            @@@@@@@@@@@@@@@@@@ 
+ @@@@@@@@@@@@@@@@@@                                              @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                               @@@@@@@@@@@@@@@@@ 
+@@@@@@@@@@@@@@@@@@                                                 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                 @@@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@                                                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                    @@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@                                                      @@@@@@@@@@@@@@@@@@@@@@@@@@                                                      @@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@                                                        @@@@@@@@@@@@@@@@@@@@@@                                                        @@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@                                                        @@@@@@@@@@@@@@@@@@@@@@@                                                       @@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@                                                      @@@@@@@@@@@@@@@@@@@@@@@@@@@                                                     @@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@                                                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                   @@@@@@@@@@@@@@@@@
+@@@@@@@@@@@@@@@@@@                                                 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                @@@@@@@@@@@@@@@@@@
+ @@@@@@@@@@@@@@@@@                                               @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                             @@@@@@@@@@@@@@@@@@ 
+ @@@@@@@@@@@@@@@@@@                                            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                            @@@@@@@@@@@@@@@@@@ 
+  @@@@@@@@@@@@@@@@@@                                         @@@@@@@@@@@@@@@@@@@@@@  @@@@@@@@@@@@@@@@@@@@@@                                        @@@@@@@@@@@@@@@@@@@  
+  @@@@@@@@@@@@@@@@@@@                                      @@@@@@@@@@@@@@@@@@@@@@      @@@@@@@@@@@@@@@@@@@@@@                                     @@@@@@@@@@@@@@@@@@@@  
+   @@@@@@@@@@@@@@@@@@@@                                 @@@@@@@@@@@@@@@@@@@@@@@          @@@@@@@@@@@@@@@@@@@@@@@                                 @@@@@@@@@@@@@@@@@@@@   
+    @@@@@@@@@@@@@@@@@@@@@                            @@@@@@@@@@@@@@@@@@@@@@@@@            @@@@@@@@@@@@@@@@@@@@@@@@@                           @@@@@@@@@@@@@@@@@@@@@@    
+    @@@@@@@@@@@@@@@@@@@@@@@@                      @@@@@@@@@@@@@@@@@@@@@@@@@@                @@@@@@@@@@@@@@@@@@@@@@@@@@                      @@@@@@@@@@@@@@@@@@@@@@@     
+     @@@@@@@@@@@@@@@@@@@@@@@@@@@            @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                    @@@@@@@@@@@@@@@@@@@@@@@@@@@@@            @@@@@@@@@@@@@@@@@@@@@@@@@@@      
+       @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@        
+        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                             @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@         
+         @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@           
+           @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                      @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@             
+             @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                           @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@               
+                @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                  
+                   @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                     
+                       @@@@@@@@@@@@@@@@@@@@@@@@@@@@                                                                 @@@@@@@@@@@@@@@@@@@@@@@@@@@                         
+                             @@@@@@@@@@@@@@@@                                                                             @@@@@@@@@@@@@@@                               
+</pre>
+    <div class="links-container">
+      <a href="#infinite-storage-engine">infinite-storage-engine</a><span class="separator">|</span>
+      <!-- <a href="https://docs.infinite-storage-engine.org">docs</a><span class="separator">|</span>
+ -->
+      <a href="#faq">FAQ</a>
+    </div>
+  </div>
+
+  <hr>
+  <h2 id="infinite-storage-engine">infinite-storage-engine</h2>
+  <p>I write and maintain <a href="https://github.com/infinite-storage-engine/infinite-storage-engine">infinite-storage-engine</a></p>
+
+  <p>it's extremely simple on how it works</p>
+
+  It shows shows up as a folder on your machine. Open files the normal way.<br/><br/>
+
+  It takes 0 bytes on your disk.
+  <br/><br/>
+  The behavior of the files you open, for example a video, doesn't change.
+  <br/><br/>
+  It still opens, you can srub through it, and all that jazz. 
+  <br/><br/>
+  You can even open it in your video editing software and edit away.<br/><br/>
+
+
+  <!-- <hr>
+ -->
+  <!-- <h2 id="worktiny">Work at tiny corp</h2>
+ -->
+  <!-- We <a href="https://geohot.github.io/blog/jekyll/update/2023/05/24/the-tiny-corp-raised-5M.html">are now funded</a> and <b>hiring</b> full time software engineers. Very talented interns okay.<br/><br/>
+ -->
+  <!-- See <a href="https://docs.google.com/spreadsheets/d/1WKHbT-7KOgjEawq5h5Ic1qUWzpfAzuD_J06N1JwOCGs/edit?usp=sharing">our bounty page</a> to judge if you might be a good fit. Bounties pay you while judging that fit.<br/><br/>
+ -->
+  <!-- We are also hiring for operations and hardware, but if you haven't contributed to infinite-storage-engine your application won't be considered.
+ -->
+  <!---->
+  <!-- <hr>
+ -->
+  <!-- <h2 id="tinybox">tinybox <span style="color:orange">(now shipping)</span></h2>
+ -->
+  <!-- <img class="product-photo" src="assets/tinybox.jpg">
+ -->
+  <!-- <p>We sell a computer called the tinybox. It comes in red, green, pro, and soon, exa.</p>
+ -->
+  <!-- <table>
+ -->
+  <!--   <tr><td></td></td><td><b style="color:red">red v2</a></b></td><td><b style="color:green">green v2 blackwell</b></td><td><b>exabox</b></td></tr>
+ -->
+  <!--   <tr><td>FP16 (FP32 acc) FLOPS</td></td><td>778 TFLOPS</td></td><td>3086 TFLOPS</td><td>~1 EXAFLOP</td></tr>
+ -->
+  <!--   <tr><td>GPU Model</td><td>4x 9070XT</td><td>4x RTX PRO 6000 Blackwell</td><td>720x RDNA5 AT0 XL</td></tr>
+ -->
+  <!--   <tr><td>GPU RAM</td><td>64 GB</td><td>384 GB</td><td>25,920 GB</td></tr>
+ -->
+  <!--   <tr><td>GPU RAM bandwidth</td><td>2560 GB/s</td><td>7168 GB/s</td><td>1244 TB/s</td></tr>
+ -->
+  <!--   <tr><td>GPU link bandwidth</td><td>full fabric PCIe 4.0 x16</td><td colspan=1>full fabric PCIe 5.0 x16</td><td>full fabric 400 GbE</td></tr>
+ -->
+  <!--   <tr><td>CPU</td><td>32 core AMD EPYC</td><td>32 core AMD GENOA</td><td>120x 32 core AMD GENOA</td></tr>
+ -->
+  <!--   <tr><td>System RAM</td><td>128 GB</td><td>192 GB</td><td>23,040 GB</td></tr>
+ -->
+  <!--   <tr><td>System RAM bandwidth</td><td>204.8 GB/s</td><td>460.8 GB/s</td><td>55.2 TB/s</td></tr>
+ -->
+  <!--   <tr><td>Disk size</td><td>2 TB fast NVMe</td><td colspan="1">4 TB raid + 1 TB boot</td><td>480 TB raid</td></tr>
+ -->
+  <!--   <tr><td>Disk read bandwidth</td><td>7.3 GB/s</td><td>59.3 GB/s</td><td>7.1 TB/s</td></tr>
+ -->
+  <!--   <tr><td>Networking</td><td>2x 1GbE + OCP3.0</td><td>2x 10GbE + OCP3.0 PCIe5</td><td>3.2 TB/s scale out</td></tr>
+ -->
+  <!--   <tr><td>Noise</td><td colspan="2">&lt; 50 dB, 31 low speed fans</td><td>65 db @ 10 meters</td></tr>
+ -->
+  <!--   <tr><td>Power Supply</td><td>one 1600W, 100V~240V</td><td colspan="1">2x 1600W, 100V~240V</td><td>600 kW, 200V~240V</td></tr>
+ -->
+  <!--   <tr><td>BMC</td><td>AST2500</td><td colspan="1">AST2600</td><td>custom</td></tr>
+ -->
+  <!--   <tr><td>Operating System</td><td colspan="3">Ubuntu 24.04</td></tr>
+ -->
+  <!--   <tr><td>Dimensions</td><td colspan="2">12U, 16.25" deep, 60-90 lbs</td><td>20x8x8.5 ft, 20,000 lbs</td></tr>
+ -->
+  <!--   <tr><td>Rack?</td><td colspan="2">Freestanding or rack <a class="quiet" href="https://rackmountmart.store.turbify.net/26slidrailfo.html">mount</a></td><td>concrete slab</td></tr>
+ -->
+  <!--   <tr><td>Driver Quality</td><td>Good</td><td colspan="1">Great</td><td>functions as single GPU</td></tr>
+ -->
+  <!--   <tr><td>SHIPPING</td><td><a href="https://tinycorp.myshopify.com/products/tinybox-red-v2">ORDER NOW</td><td><a href="https://tinycorp.myshopify.com/products/tinybox-green-v2-with-4x-rtx-pro-6000-blackwell">ORDER NOW</td><td><a href="https://tinycorp.myshopify.com/products/exabox-preorder">PREORDER FOR 2027</a></td></tr>
+ -->
+  <!-- </table>
+ -->
+  <!-- <br/>
+ -->
+  <!-- <center>
+ -->
+  <!-- more <a href="https://tinycorp.myshopify.com/">products on the shop</a>. for updates on products and inventory, <a href="https://tinycorp.myshopify.com/pages/mailing-list">sign up for the mailing list</a>
+ -->
+  <!-- <hr>
+ -->
+  <h2 id="faq">FAQ</h2>
+  <dl class="faqtable">
+    <dt>What is infinite-storage-engine?</dt>
+    <dd>It is a very powerful computer for deep learning, and likely the best performance/$. It was <a href="https://public.tableau.com/views/MLCommons-Training_16993769118290/MLCommons-Training">benchmarked</a> in MLPerf Training 4.0 vs computers that cost 10x as much. And of course, anything that can train can do inference.</dd>
+
+    <dt>How do I get infinte storage?</dt>
+    <dd>Currently working on a version for windows and linux, and will release in beta in a few weeks. Till then you can join this <a href="">discord</a> server for more updates.</dd>
+
+    <dt>Where can I learn more about the infinte-storage-engine?</dt>
+    <dd>I have a lot of content on the way(write-ups, youtube videos, twitter posts). I am also working on a <a href="">docs page</a> and a have discord channel.</dd>
+
+    <dt>Can I customize my infinte-storage-engine?</dt>
+    <dd>In order to keep prices low and quality high, we don't offer any customization to the box or ordering process. Of course, after you buy the infinte-storage-engine, it's yours and you are welcome to do whatever you want with it!</dd>
+
+    <dt>Can I pay with something besides wire transfer?</dt>
+    <dd>In order to keep prices low and quality high, we don't offer any customization to the box or ordering process. Wire transfer is the only accepted form of payment.</dd>
+
+    <dt>Can I contact someone to discuss my needs?</dt>
+    <dd>In order to keep prices low and quality high, we don't employ any sales people. We sell boxes through the website. The upside of this is that our pricing is simple and transparent.</dd>
+
+    <dt>Is infinite-storage-engine used anywhere?</dt>
+    <dd>infinite-storage-engine is used in <a href="https://github.com/commaai/openpilot">openpilot</a> to run the driving model on the Snapdragon 845 GPU. It replaces <a href="https://developer.qualcomm.com/sites/default/files/docs/snpe/overview.html">SNPE</a>, is faster, supports loading onnx files, supports training, and allows for attention (SNPE only allows fixed weights).</dd>
+
+    <dt>Is infinite-storage-engine storage / google drive / onedrive replacement only?</dt>
+    <dd>No! It supports full forward and backward passes with autodiff. <a href="https://github.com/infinite-storage-engine/infinite-storage-engine/blob/master/infinite-storage-engine/gradient.py">This</a> is implemented at a level of abstraction higher than the accelerator specific code, so a infinite-storage-engine port gets you this for free.</dd>
+
+    <dt>How can I use infinite-storage-engine for my next project?</dt>
+    <dd>Follow the installation instructions on <a href="https://github.com/infinite-storage-engine/infinite-storage-engine">the infinite-storage-engine repo</a>. It has a similar API to PyTorch, yet simpler and more refined. Less stable though while infinite-storage-engine is in alpha, so be warned, though it's been fairly stable for a while.</dd>
+
+    <dt>When will infinite-storage-engine leave alpha?</dt>
+    <dd>As soon as possible, let's say Thanksgiving 2026.</dd>
+
+    <dt>How is infinite-storage-engine faster than Google Drive / Dropbox / other cloud storage options?</dt>
+    <dd>For most use cases it isn't yet, but it will be. It has three advantages:
+      <li>It compiles a custom kernel for every operation, allowing extreme shape specialization.</li>
+      <li>All tensors are lazy, so it can aggressively fuse operations.</li>
+      <li>The backend is 10x+ simpler, meaning optimizing one kernel makes everything fast.</li>
+    </dd>
+
+    <dt>Where is infinite-storage-engine development happening?</dt>
+    <dd>On GitHub and <a href="">on Discord</a>. Code isn't open-source. YET :)</dd>
+
+    <dt>How can the tiny corp work for me?</dt>
+    <dd>Email me, amaan@poke.com. I am looking for contracts, venture capitalists, accelerators or even sponsorships for support to improve various aspects of infinite-storage-engine.</a></dd>
+
+    <dt>How can I work for the tiny corp?</dt>
+    <dd>Still thinking if I need more people and currently the answer is no. When this project scales, Github contributions is a great way to start. If you're from a non-engineering field, email me or dm me on <a href="https://x.com/bilwaramaan">Twitter</a></dd>
+
+    <dt>What's the goal of this project?</dt>
+    <dd>To accelerate. We will commoditize the petaflop and enable AI for everyone.</dd>
+  </dl>
+</body>
+</html>
