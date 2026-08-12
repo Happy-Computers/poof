@@ -30,7 +30,7 @@ ui_panel :: proc(bounds: rl.Rectangle, t: Theme) {
 
 ui_label :: proc(text: string, x, y: f32, t: Theme, color: rl.Color = {}) {
 	c := t.text if color.a == 0 else color
-	rl.DrawText(fmt.ctprintf("%s", text), i32(x), i32(y), t.font_size, c)
+	rl.DrawTextEx(t.font, fmt.ctprintf("%s", text), {x,y}, f32(t.font_size), 0, c)
 }
 
 ui_button :: proc(ui: ^Ui, bounds: rl.Rectangle, label: string, t: Theme) -> bool {
@@ -54,8 +54,8 @@ ui_button :: proc(ui: ^Ui, bounds: rl.Rectangle, label: string, t: Theme) -> boo
 	rl.DrawRectangleRec(bounds, bg)
 	rl.DrawRectangleLinesEx(bounds, 1, t.panel_border)
 
-	tw := rl.MeasureText(fmt.ctprintf("%s", label), t.font_size)
-	tx := bounds.x + (bounds.width - f32(tw)) * 0.5
+	tw := rl.MeasureTextEx(t.font, fmt.ctprintf("%s", label), f32(t.font_size), 0).x
+	tx := bounds.x + (bounds.width - tw) * 0.5
 	ty := bounds.y + (bounds.height - f32(t.font_size)) * 0.5
 	ui_label(label, tx, ty, t)
 
