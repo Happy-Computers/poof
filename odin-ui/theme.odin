@@ -14,12 +14,34 @@ Theme :: struct {
 	bad:          rl.Color,
 	row_hot:      rl.Color,
 	row_sel:      rl.Color,
+	font: rl.Font,
+	font_owned: bool,
 	font_size:    i32,
 	pad:          f32,
 	row_h:        f32,
 	status_h:     f32,
 	detail_h:     f32,
 }
+
+
+theme_load_font :: proc(t: ^Theme){
+	t.font = rl.LoadFontEx("C:/Windows/Fonts/arial.ttf", t.font_size * 2, nil, 0)
+	if t.font.texture.id != 0 {
+		rl.SetTextureFilter(t.font.texture, rl.TextureFilter.BILINEAR)
+		t.font_owned = true
+		return
+	}
+	t.font = rl.GetFontDefault()
+	t.font_owned = false
+}
+
+theme_unload_font::proc(t:^Theme){
+	if t.font_owned {
+		rl.UnloadFont(t.font)
+		t.font_owned = false
+	}
+}
+
 
 theme_default :: proc() -> Theme {
 	return Theme{
