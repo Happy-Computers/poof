@@ -20,3 +20,6 @@ docs/relay-token.local.md
 docs/relay-config.local.md
 scripts/*.local.ps1
 scripts/*.local.zsh
+
+# encrypted env (commit this; never commit plaintext .env)
+!.env.enc
