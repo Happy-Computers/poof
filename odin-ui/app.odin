@@ -20,7 +20,9 @@ app_default_mount :: proc() -> string {
 	when ODIN_OS == .Windows {
 		return "Z:/"
 	} else {
+		// for linux
 		return "/tmp/infinity-storage"
+		// need to add a switch instead for darwin
 	}
 }
 
