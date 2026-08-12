@@ -42,11 +42,13 @@ app_init :: proc() -> App {
 		status = status_init(mount, api),
 		browse = browse_init(mount, use_mock),
 	}
+	theme_load_font(&app.theme)
 	status_refresh(&app.status)
 	return app
 }
 
 app_destroy :: proc(app: ^App) {
+	theme_unload_font(&app.theme)
 	browse_destroy(&app.browse)
 }
 
