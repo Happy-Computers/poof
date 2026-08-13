@@ -18,8 +18,8 @@ stream_proxy/zig-out/
 .env*.bak
 docs/relay-token.local.md
 docs/relay-config.local.md
-scripts/*.local.ps1
-scripts/*.local.zsh
+scripts/*.ps1
+scripts/*.zsh
 
 # encrypted env (commit this; never commit plaintext .env)
 !.env.enc
