@@ -11,16 +11,24 @@ Ui :: struct {
 
 ui_begin :: proc(ui: ^Ui) {
 	ui.hot = 0
-	ui.id_seq = 1
+	ui.id_seq = -1
 	if !rl.IsMouseButtonDown(.LEFT) && !rl.IsMouseButtonReleased(.LEFT) {
 		ui.active = 0
 	}
 }
 
 ui_next_id :: proc(ui: ^Ui) -> i32 {
+	assert(ui.id_seq < 0)
+	assert(ui.id_seq > -2_147_483_648)
 	id := ui.id_seq
-	ui.id_seq += 1
+	ui.id_seq -= 1
 	return id
+}
+
+ui_row_id :: proc(index: int) -> i32 {
+	assert(index >= 0)
+	assert(index < 2_147_483_647)
+	return i32(index) + 1
 }
 
 ui_panel :: proc(bounds: rl.Rectangle, t: Theme) {
@@ -64,12 +72,13 @@ ui_button :: proc(ui: ^Ui, bounds: rl.Rectangle, label: string, t: Theme) -> boo
 
 ui_row :: proc(
 	ui: ^Ui,
+	id: i32,
 	bounds: rl.Rectangle,
 	label: string,
 	selected: bool,
 	t: Theme,
 ) -> bool {
-	id := ui_next_id(ui)
+	assert(id > 0)
 	mouse := rl.GetMousePosition()
 	hover := rl.CheckCollisionPointRec(mouse, bounds)
 

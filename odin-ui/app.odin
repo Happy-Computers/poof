@@ -143,7 +143,7 @@ app_draw_browse :: proc(app: ^App, bounds: rl.Rectangle) {
 		}
 		prefix := "[D] " if entry.is_dir else "    "
 		label := fmt.tprintf("%s%s", prefix, entry.name)
-		if ui_row(&app.ui, row, label, app.browse.selected == i, t) {
+		if ui_row(&app.ui, ui_row_id(i), row, label, app.browse.selected == i, t) {
 			app.browse.selected = i
 		}
 	}
