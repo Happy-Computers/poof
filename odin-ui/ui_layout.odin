@@ -12,7 +12,7 @@ Ui :: struct {
 ui_begin :: proc(ui: ^Ui) {
 	ui.hot = 0
 	ui.id_seq = 1
-	if !rl.IsMouseButtonDown(.LEFT) {
+	if !rl.IsMouseButtonDown(.LEFT) && !rl.IsMouseButtonReleased(.LEFT) {
 		ui.active = 0
 	}
 }
