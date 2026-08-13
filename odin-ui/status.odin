@@ -1,7 +1,6 @@
 package main
 
-import "core:os"
-import "core:time"
+import "core:strings"
 import rl "vendor:raylib"
 
 ApiState :: enum {
@@ -22,37 +21,30 @@ Status :: struct {
 	mount_path: string,
 	api_url:    string,
 	last_error: string,
-	last_poll:  time.Time,
 }
 
 status_init :: proc(mount_path, api_url: string) -> Status {
 	return Status{
 		api        = .Unknown,
 		mount      = .Unknown,
-		mount_path = mount_path,
-		api_url    = api_url,
-		last_error = "",
+		mount_path = strings.clone(mount_path),
+		api_url    = strings.clone(api_url),
 	}
 }
 
-status_refresh :: proc(s: ^Status) {
-	s.last_poll = time.now()
-	s.last_error = ""
+status_destroy :: proc(s: ^Status) {
+	delete(s.mount_path)
+	delete(s.api_url)
+}
 
-	if s.mount_path == "" {
-		s.mount = .Down
-		s.last_error = "mount path empty"
+status_set_mount :: proc(s: ^Status, up: bool, error: string) {
+	if up {
+		s.mount = .Up
+		s.last_error = ""
 		return
 	}
-
-	if os.is_dir(s.mount_path) {
-		s.mount = .Up
-	} else {
-		s.mount = .Down
-		s.last_error = "mount path missing (start infinity-storage-mount)"
-	}
-
-	// TODO: HTTP GET api_url/health when client wired
+	s.mount = .Down
+	s.last_error = error
 }
 
 status_api_label :: proc(s: Status) -> (string, rl.Color) {
@@ -76,7 +68,7 @@ status_mount_label :: proc(s: Status) -> (string, rl.Color) {
 	case .Down:
 		return "Mount: down", t.bad
 	case .Unknown:
-		return "Mount: ?", t.warn
+		return "Mount: loading", t.warn
 	}
 	return "Mount: ?", t.text_dim
 }

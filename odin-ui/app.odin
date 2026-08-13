@@ -37,27 +37,30 @@ app_default_api :: proc() -> string {
 app_init :: proc() -> App {
 	mount := app_default_mount()
 	api := app_default_api()
-	use_mock := !os.is_dir(mount)
 
 	app := App{
 		theme  = theme_default(),
 		status = status_init(mount, api),
-		browse = browse_init(mount, use_mock),
+		browse = browse_init(mount),
 	}
 	theme_load_font(&app.theme)
-	status_refresh(&app.status)
 	return app
 }
 
 app_destroy :: proc(app: ^App) {
 	theme_unload_font(&app.theme)
 	browse_destroy(&app.browse)
+	status_destroy(&app.status)
 }
 
 app_frame :: proc(app: ^App) {
 	t := app.theme
 	w := f32(rl.GetScreenWidth())
 	h := f32(rl.GetScreenHeight())
+
+	if browse_poll(&app.browse) {
+		status_set_mount(&app.status, app.browse.error == "", app.browse.error)
+	}
 
 	ui_begin(&app.ui)
 	rl.ClearBackground(t.bg)
@@ -96,13 +99,8 @@ app_draw_status :: proc(app: ^App, bounds: rl.Rectangle) {
 
 	btn := rl.Rectangle{bounds.x + bounds.width - 100 - t.pad, bounds.y + t.pad, 100, 32}
 	if ui_button(&app.ui, btn, "Refresh", t) {
-		status_refresh(&app.status)
-		app.browse.use_mock = app.status.mount != .Up
-		if app.status.mount == .Up {
-			app.browse.cwd = app.status.mount_path
-			app.browse.root = app.status.mount_path
-		}
 		browse_reload(&app.browse)
+		app.status.mount = .Unknown
 	}
 }
 
@@ -111,9 +109,11 @@ app_draw_browse :: proc(app: ^App, bounds: rl.Rectangle) {
 	ui_panel(bounds, t)
 
 	header_y := bounds.y + t.pad
-	title := "Browse (mock)" if app.browse.use_mock else "Browse"
+	title := "Browse"
 	ui_label(title, bounds.x + t.pad, header_y, t)
-	if app.browse.error != "" {
+	if app.browse.loading {
+		ui_label("Loading directory…", bounds.x + 160, header_y, t, t.warn)
+	} else if app.browse.error != "" {
 		ui_label(app.browse.error, bounds.x + 160, header_y, t, t.warn)
 	}
 
