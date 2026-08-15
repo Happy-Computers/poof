@@ -15,12 +15,34 @@ $ErrorActionPreference = "Stop"
 # Decrypts .env.enc with sops if plaintext .env is missing.
 
 $repository_root = Split-Path -Parent $PSScriptRoot
+$build_root = $repository_root
+
+if ($repository_root.StartsWith("\\")) {
+    $build_root = Join-Path $env:LOCALAPPDATA "InfinityStorage\windows-build"
+    Write-Output "Staging Windows build tree..."
+    $excluded_directories = @(
+        (Join-Path $repository_root ".git"),
+        (Join-Path $repository_root ".jj"),
+        (Join-Path $repository_root ".repos"),
+        (Join-Path $repository_root "stream_proxy\zig-out"),
+        (Join-Path $repository_root "stream_proxy\.zig-cache")
+    )
+    $robocopy_arguments = @($repository_root, $build_root, "/MIR", "/XD") + $excluded_directories + @(
+        "/XF", ".env", ".env.enc", "infinity-storage-mount", "infinity-storage-mount.exe",
+        "infinity-storage-origin", "infinity-storage-origin.exe",
+        "infinity-storage-relay", "infinity-storage-relay.exe",
+        "/NFL", "/NDL", "/NJH", "/NJS", "/NP"
+    )
+    & robocopy @robocopy_arguments
+    if ($LASTEXITCODE -gt 7) { throw "failed to stage Windows build tree" }
+}
+
 Set-Location $repository_root
 
 $mount_name = "infinity-storage-mount.exe"
 $proxy_name = "stream_proxy.exe"
-$mount_bin = Join-Path $repository_root $mount_name
-$proxy_bin = Join-Path $repository_root "stream_proxy\zig-out\bin\$proxy_name"
+$mount_bin = Join-Path $build_root $mount_name
+$proxy_bin = Join-Path $build_root "stream_proxy\zig-out\bin\$proxy_name"
 $spool_dir = Join-Path $env:LOCALAPPDATA "InfinityStorage\spool"
 
 if ([string]::IsNullOrWhiteSpace($EnvFile)) {
@@ -86,7 +108,7 @@ function Ensure-Build {
     $zig_cache_dir = Join-Path $env:LOCALAPPDATA "InfinityStorage\zig-cache"
     $zig_global_cache_dir = Join-Path $env:LOCALAPPDATA "InfinityStorage\zig-global-cache"
     New-Item -ItemType Directory -Force -Path $zig_cache_dir, $zig_global_cache_dir | Out-Null
-    Push-Location (Join-Path $repository_root "stream_proxy")
+    Push-Location (Join-Path $build_root "stream_proxy")
     try {
         & zig build -Dtarget=x86_64-windows-gnu `
             --cache-dir $zig_cache_dir `
@@ -97,8 +119,13 @@ function Ensure-Build {
     }
 
     Write-Output "Building $mount_name..."
-    & go build -o $mount_bin ./cmd/infinity-storage-mount
-    if ($LASTEXITCODE -ne 0) { throw "go build failed" }
+    Push-Location $build_root
+    try {
+        & go build -o $mount_bin ./cmd/infinity-storage-mount
+        if ($LASTEXITCODE -ne 0) { throw "go build failed" }
+    } finally {
+        Pop-Location
+    }
 }
 
 Ensure-PlainEnv -Path $EnvFile
