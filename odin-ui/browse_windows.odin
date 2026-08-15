@@ -8,7 +8,7 @@ import sync_chan "core:sync/chan"
 browse_load_windows :: proc(path: string, results: sync_chan.Chan(BrowseEvent)) {
 	path_utf16 := win.utf8_to_utf16(path, context.temp_allocator)
 	if len(path_utf16) == 0 {
-		assert(sync_chan.send(results, BrowseEvent{kind = .Failed, error = "cannot encode mount path"}))
+		browse_send(results, BrowseEvent{kind = .Failed, error = "cannot encode mount path"})
 		return
 	}
 	base_length := len(path_utf16) - 1
@@ -29,27 +29,31 @@ browse_load_windows :: proc(path: string, results: sync_chan.Chan(BrowseEvent)) 
 	data: win.WIN32_FIND_DATAW
 	handle := win.FindFirstFileW(cstring16(raw_data(search)), &data)
 	if handle == win.INVALID_HANDLE_VALUE {
-		assert(sync_chan.send(results, BrowseEvent{kind = .Failed, error = "cannot open mount directory"}))
+		browse_send(results, BrowseEvent{kind = .Failed, error = "cannot open mount directory"})
 		return
 	}
 	defer win.FindClose(handle)
 
-	assert(sync_chan.send(results, BrowseEvent{kind = .Ready}))
+	if !browse_send(results, BrowseEvent{kind = .Ready}) {
+		return
+	}
 	for {
-		browse_load_windows_entry(path, &data, results)
+		if !browse_load_windows_entry(path, &data, results) {
+			return
+		}
 		if win.FindNextFileW(handle, &data) {
 			continue
 		}
 		if win.GetLastError() != win.ERROR_NO_MORE_FILES {
-			assert(sync_chan.send(results, BrowseEvent{kind = .Failed, error = "cannot read mount directory"}))
+			browse_send(results, BrowseEvent{kind = .Failed, error = "cannot read mount directory"})
 			return
 		}
 		break
 	}
-	assert(sync_chan.send(results, BrowseEvent{kind = .Complete}))
+	browse_send(results, BrowseEvent{kind = .Complete})
 }
 
-browse_load_windows_entry :: proc(path: string, data: ^win.WIN32_FIND_DATAW, results: sync_chan.Chan(BrowseEvent)) {
+browse_load_windows_entry :: proc(path: string, data: ^win.WIN32_FIND_DATAW, results: sync_chan.Chan(BrowseEvent)) -> bool {
 	name_length := 0
 	for name_length < len(data.cFileName) {
 		if data.cFileName[name_length] == 0 {
@@ -58,21 +62,21 @@ browse_load_windows_entry :: proc(path: string, data: ^win.WIN32_FIND_DATAW, res
 		name_length += 1
 	}
 	if name_length == 0 {
-		return
+		return true
 	}
 	name := win.utf16_to_utf8(data.cFileName[:name_length], context.allocator) or_else ""
 	if name == "" || name == "." || name == ".." {
-		return
+		return true
 	}
 	full, join_err := filepath.join({path, name})
 	if join_err != nil {
 		delete(name)
-		return
+		return true
 	}
 	is_dir := data.dwFileAttributes&win.FILE_ATTRIBUTE_DIRECTORY != 0
 	size := i64(data.nFileSizeHigh)<<32 | i64(data.nFileSizeLow)
-	assert(sync_chan.send(results, BrowseEvent{
+	return browse_send(results, BrowseEvent{
 		kind  = .Entry,
 		entry = {name = name, path = full, is_dir = is_dir, size = size},
-	}))
+	})
 }

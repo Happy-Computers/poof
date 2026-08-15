@@ -99,8 +99,10 @@ app_draw_status :: proc(app: ^App, bounds: rl.Rectangle) {
 
 	btn := rl.Rectangle{bounds.x + bounds.width - 100 - t.pad, bounds.y + t.pad, 100, 32}
 	if ui_button(&app.ui, btn, "Refresh", t) {
-		browse_reload(&app.browse)
-		app.status.mount = .Unknown
+		if !app.browse.loading {
+			browse_reload(&app.browse)
+			app.status.mount = .Unknown
+		}
 	}
 }
 

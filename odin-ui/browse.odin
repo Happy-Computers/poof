@@ -5,6 +5,7 @@ import "core:os"
 import "core:path/filepath"
 import "core:slice"
 import "core:strings"
+import "core:time"
 import sync_chan "core:sync/chan"
 import thread "core:thread"
 
@@ -63,7 +64,7 @@ browse_destroy :: proc(b: ^Browse) {
 			b.loader = nil
 			break
 		}
-		thread.yield()
+		time.sleep(time.Millisecond)
 	}
 	browse_discard_events(b)
 	sync_chan.destroy(b.results)
@@ -83,6 +84,14 @@ browse_discard_events :: proc(b: ^Browse) {
 browse_delete_entry :: proc(entry: BrowseEntry) {
 	delete(entry.name)
 	delete(entry.path)
+}
+
+browse_send :: proc(results: sync_chan.Chan(BrowseEvent), event: BrowseEvent) -> bool {
+	sent := sync_chan.send(results, event)
+	if !sent && event.kind == .Entry {
+		browse_delete_entry(event.entry)
+	}
+	return sent
 }
 
 browse_clear_entries :: proc(b: ^Browse) {
@@ -162,12 +171,14 @@ browse_load_worker :: proc(path: string, results: sync_chan.Chan(BrowseEvent)) {
 browse_load_os :: proc(path: string, results: sync_chan.Chan(BrowseEvent)) {
 	directory, err := os.open(path)
 	if err != nil {
-		assert(sync_chan.send(results, BrowseEvent{kind = .Failed, error = "cannot open mount directory"}))
+		browse_send(results, BrowseEvent{kind = .Failed, error = "cannot open mount directory"})
 		return
 	}
 	defer os.close(directory)
 
-	assert(sync_chan.send(results, BrowseEvent{kind = .Ready}))
+	if !browse_send(results, BrowseEvent{kind = .Ready}) {
+		return
+	}
 	iterator := os.read_directory_iterator_create(directory)
 	defer os.read_directory_iterator_destroy(&iterator)
 	for fi in os.read_directory_iterator(&iterator) {
@@ -178,7 +189,7 @@ browse_load_os :: proc(path: string, results: sync_chan.Chan(BrowseEvent)) {
 		if join_err != nil {
 			continue
 		}
-		assert(sync_chan.send(results, BrowseEvent{
+		if !browse_send(results, BrowseEvent{
 			kind  = .Entry,
 			entry = {
 				name   = strings.clone(fi.name),
@@ -186,14 +197,16 @@ browse_load_os :: proc(path: string, results: sync_chan.Chan(BrowseEvent)) {
 				is_dir = fi.type == .Directory,
 				size   = fi.size,
 			},
-		}))
+		}) {
+			return
+		}
 	}
 	_, iter_err := os.read_directory_iterator_error(&iterator)
 	if iter_err != nil {
-		assert(sync_chan.send(results, BrowseEvent{kind = .Failed, error = "cannot read mount directory"}))
+		browse_send(results, BrowseEvent{kind = .Failed, error = "cannot read mount directory"})
 		return
 	}
-	assert(sync_chan.send(results, BrowseEvent{kind = .Complete}))
+	browse_send(results, BrowseEvent{kind = .Complete})
 }
 
 browse_selected :: proc(b: Browse) -> (BrowseEntry, bool) {
