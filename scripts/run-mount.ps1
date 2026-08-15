@@ -83,9 +83,14 @@ function Ensure-Build {
     }
 
     Write-Output "Building stream_proxy (Windows)..."
+    $zig_cache_dir = Join-Path $env:LOCALAPPDATA "InfinityStorage\zig-cache"
+    $zig_global_cache_dir = Join-Path $env:LOCALAPPDATA "InfinityStorage\zig-global-cache"
+    New-Item -ItemType Directory -Force -Path $zig_cache_dir, $zig_global_cache_dir | Out-Null
     Push-Location (Join-Path $repository_root "stream_proxy")
     try {
-        & zig build -Dtarget=x86_64-windows-gnu
+        & zig build -Dtarget=x86_64-windows-gnu `
+            --cache-dir $zig_cache_dir `
+            --global-cache-dir $zig_global_cache_dir
         if ($LASTEXITCODE -ne 0) { throw "zig build failed" }
     } finally {
         Pop-Location
