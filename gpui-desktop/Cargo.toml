@@ -1,0 +1,8 @@
+[package]
+name = "infinity-desktop"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gpui = { path = "../../gpui-ce/crates/gpui" }
+gpui_platform = { path = "../../gpui-ce/crates/gpui_platform", features = ["wayland", "x11"] }
