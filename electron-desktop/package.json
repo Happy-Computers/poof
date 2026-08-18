@@ -1,0 +1,31 @@
+{
+    "name": "minimal-repro",
+    "version": "1.0.0",
+    "description": "A minimal Electron application",
+    "main": "main.js",
+    "build": {
+        "appId": "your.id",
+        "mac": {
+            "category": "your.app.category.type"
+        }
+    },
+    "scripts": {
+        "start": "electron .",
+        "app:dir": "electron-builder --dir",
+        "app:dist": "electron-builder"
+    },
+    "repository": "https://github.com/electron/minimal-repro",
+    "keywords": [
+        "Electron",
+        "quick",
+        "start",
+        "tutorial",
+        "demo"
+    ],
+    "author": "GitHub",
+    "license": "CC0-1.0",
+    "devDependencies": {
+        "electron": "^43.4.0",
+        "electron-builder": "^26.15.3"
+    }
+}
