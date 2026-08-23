@@ -52,6 +52,28 @@ func TestReaddirDoesNotRefreshCatalog(t *testing.T) {
 	}
 }
 
+func TestStatfsReportsWritableCapacity(t *testing.T) {
+	manager, err := ingest.NewManager(ingest.Config{
+		SpoolDir: t.TempDir(),
+		Store:    &discardStore{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filesystem := NewMultiWritable(nil, nil, nil, manager)
+	defer filesystem.Stop()
+	stat := &fuse.Statfs_t{}
+	if status := filesystem.Statfs("/", stat); status != 0 {
+		t.Fatalf("statfs status=%d", status)
+	}
+	if stat.Bavail == 0 || stat.Bfree == 0 || stat.Blocks == 0 {
+		t.Fatalf("capacity=%+v", stat)
+	}
+	if stat.Bavail*stat.Frsize != ingest.MaxSpoolBytes {
+		t.Fatalf("available bytes=%d", stat.Bavail*stat.Frsize)
+	}
+}
+
 func TestNewSingle(t *testing.T) {
 	root := NewSingle(nil, "video.mp4", 42)
 	if root.singleName != "video.mp4" || root.singleSize != 42 {
