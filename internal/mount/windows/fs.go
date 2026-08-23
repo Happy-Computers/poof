@@ -19,6 +19,8 @@ import (
 
 type CatalogLoader func(ctx context.Context) ([]catalog.Entry, error)
 
+const filesystemBlockBytes = 4 * 1024
+
 type InfinityStorageFS struct {
 	fuse.FileSystemBase
 
@@ -107,6 +109,28 @@ func (f *InfinityStorageFS) Init() {
 func (f *InfinityStorageFS) Destroy() {
 	f.Stop()
 	f.FileSystemBase.Destroy()
+}
+
+func (f *InfinityStorageFS) Statfs(path string, stat *fuse.Statfs_t) int {
+	_ = path
+	stat.Bsize = filesystemBlockBytes
+	stat.Frsize = filesystemBlockBytes
+	stat.Blocks = ingest.MaxSpoolBytes / filesystemBlockBytes
+	stat.Files = ingest.MaxCatalogFiles
+	stat.Namemax = ingest.MaxBasenameBytes
+	if f.ingest == nil {
+		return 0
+	}
+	f.mu.Lock()
+	fileCount := len(f.entries)
+	f.mu.Unlock()
+	stat.Bfree = stat.Blocks
+	stat.Bavail = stat.Blocks
+	if fileCount < ingest.MaxCatalogFiles {
+		stat.Ffree = uint64(ingest.MaxCatalogFiles - fileCount)
+		stat.Favail = stat.Ffree
+	}
+	return 0
 }
 
 func fillOwner(stat *fuse.Stat_t) {

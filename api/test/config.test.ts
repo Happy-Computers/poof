@@ -3,12 +3,12 @@ import test from "node:test";
 import { load_config } from "../src/config.js";
 
 const valid_env = {
-    AUTH_EMAIL_FROM: "Infinity Storage <auth@example.com>",
     BETTER_AUTH_SECRET: "01234567890123456789012345678901",
     BETTER_AUTH_URL: "http://127.0.0.1:3005",
     DATABASE_URL: "postgresql://postgres:password@localhost:5432/postgres",
+    GOOGLE_CLIENT_ID: "test-client-id",
+    GOOGLE_CLIENT_SECRET: "test-client-secret",
     PORT: "3005",
-    RESEND_API_KEY: "re_test",
 };
 
 test("load_config accepts bounded valid configuration", () => {

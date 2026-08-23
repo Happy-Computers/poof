@@ -6,6 +6,19 @@ import (
 	"github.com/amaan/infinity-storage/internal/catalog"
 )
 
+func TestNormalizeListPrefix(t *testing.T) {
+	cases := map[string]string{
+		"":                 "",
+		"account/project":  "account/project/",
+		"account/project/": "account/project/",
+	}
+	for input, expected := range cases {
+		if actual := normalizeListPrefix(input); actual != expected {
+			t.Fatalf("normalizeListPrefix(%q)=%q", input, actual)
+		}
+	}
+}
+
 func TestNewStoreRejectsEmptyAndDup(t *testing.T) {
 	_, err := newStore(nil, "b", "", []ObjectMeta{{Name: "a", Key: "a", Size: 0}})
 	if err == nil {

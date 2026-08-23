@@ -4,12 +4,69 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+type libraryAuthorizer struct {
+	library string
+	token   string
+}
+
+func (a libraryAuthorizer) Authorize(ctx context.Context, token string, library string) error {
+	if token == a.token && library == a.library {
+		return nil
+	}
+	return fmt.Errorf("denied")
+}
+
+func TestHTTPAuthorizerPassesBearerAndLibrary(t *testing.T) {
+	authority := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet {
+			t.Fatalf("method=%s", request.Method)
+		}
+		if request.URL.Path != "/v1/libraries/demo/authorize" {
+			t.Fatalf("path=%s", request.URL.Path)
+		}
+		if request.Header.Get("Authorization") != "Bearer session" {
+			t.Fatalf("authorization=%q", request.Header.Get("Authorization"))
+		}
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	defer authority.Close()
+	authorizer, err := NewHTTPAuthorizer(authority.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authorizer.Authorize(context.Background(), "session", "demo"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRelayAuthorizesLibrary(t *testing.T) {
+	server, err := NewServerWithAuthorizer(libraryAuthorizer{library: "demo", token: "session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/streams/demo", nil)
+	request.Header.Set("Authorization", "Bearer session")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("authorized status=%d", response.Code)
+	}
+	request = httptest.NewRequest(http.MethodGet, "/v1/streams/other", nil)
+	request.Header.Set("Authorization", "Bearer session")
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status=%d", response.Code)
+	}
+}
 
 func TestRelayPublishesAndServesWriterRanges(t *testing.T) {
 	server, err := NewServer("secret")

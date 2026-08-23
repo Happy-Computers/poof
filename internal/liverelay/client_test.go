@@ -50,6 +50,13 @@ func TestClientPublishesStreamingFileAndServesRange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := manager.Close(closeCtx); err != nil {
+			t.Errorf("close manager: %v", err)
+		}
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	client.Start(ctx, manager)

@@ -20,6 +20,7 @@ func ListFlat(ctx context.Context, client *s3.Client, bucket, prefix string) ([]
 	if client == nil {
 		return nil, fmt.Errorf("s3 client required")
 	}
+	prefix = normalizeListPrefix(prefix)
 
 	var (
 		out       []ObjectMeta
@@ -88,4 +89,11 @@ func ListFlat(ctx context.Context, client *s3.Client, bucket, prefix string) ([]
 		}
 	}
 	return nil, fmt.Errorf("list s3://%s/%s: too many pages (>%d)", bucket, prefix, pageGuard)
+}
+
+func normalizeListPrefix(prefix string) string {
+	if prefix == "" {
+		return ""
+	}
+	return strings.TrimRight(prefix, "/") + "/"
 }

@@ -14,17 +14,28 @@ import (
 
 func main() {
 	listen := flag.String("listen", ":8080", "relay listen address")
-	tokenFile := flag.String("token-file", "", "file containing the relay bearer token")
+	tokenFile := flag.String("token-file", "", "file containing a development relay bearer token")
+	authorityURL := flag.String("authority-url", "", "Infinity Storage API URL that authorizes account libraries")
 	debug := flag.Bool("debug", false, "log relay requests, statuses, and latency")
 	flag.Parse()
-	if *tokenFile == "" {
-		log.Fatal("infinity-storage-relay: --token-file required")
+	if (*tokenFile == "" && *authorityURL == "") || (*tokenFile != "" && *authorityURL != "") {
+		log.Fatal("infinity-storage-relay: provide exactly one of --token-file or --authority-url")
 	}
-	content, err := os.ReadFile(*tokenFile)
-	if err != nil {
-		log.Fatal(err)
+	var server *liverelay.Server
+	var err error
+	if *authorityURL != "" {
+		authorizer, authorityErr := liverelay.NewHTTPAuthorizer(*authorityURL)
+		if authorityErr != nil {
+			log.Fatal(authorityErr)
+		}
+		server, err = liverelay.NewServerWithAuthorizer(authorizer)
+	} else {
+		content, readErr := os.ReadFile(*tokenFile)
+		if readErr != nil {
+			log.Fatal(readErr)
+		}
+		server, err = liverelay.NewServer(strings.TrimSpace(string(content)))
 	}
-	server, err := liverelay.NewServer(strings.TrimSpace(string(content)))
 	if err != nil {
 		log.Fatal(err)
 	}
