@@ -91,6 +91,32 @@ function Stop-Api {
     $api_process.Dispose()
 }
 
+function Test-Api {
+    try {
+        $health = Invoke-RestMethod `
+            -Uri "$($env:INFINITY_STORAGE_API_URL.TrimEnd('/'))/desktop/health" `
+            -Method Get `
+            -TimeoutSec 2
+        return $health.version -eq 2
+    } catch {
+        return $false
+    }
+}
+
+function Stop-StaleApi {
+    $port = if ([string]::IsNullOrWhiteSpace($env:PORT)) { 3005 } else { [int]$env:PORT }
+    $connections = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+    foreach ($connection in $connections) {
+        $owner_process = Get-Process -Id $connection.OwningProcess -ErrorAction SilentlyContinue
+        if ($null -eq $owner_process) { continue }
+        if ($owner_process.ProcessName -ne "node") {
+            throw "port $port is owned by non-Poof process $($owner_process.ProcessName) ($($owner_process.Id))"
+        }
+        Stop-Process -Id $owner_process.Id -Force
+    }
+    if ($connections.Count -gt 0) { Start-Sleep -Milliseconds 500 }
+}
+
 Import-DotEnv -Path $EnvFile
 
 if ([string]::IsNullOrWhiteSpace($env:INFINITY_STORAGE_API_URL)) {
@@ -127,34 +153,48 @@ if ($SkipBuild) {
 }
 
 New-Item -ItemType Directory -Force -Path $logs_directory | Out-Null
-Set-Content -LiteralPath $api_stdout_log -Value ""
-Set-Content -LiteralPath $api_stderr_log -Value ""
 
 if (-not $SkipBuild) {
     Invoke-Build
 }
 
-$api_command = 'call "' + $api_runner + '" --env-file="' + $EnvFile + '" src/server.ts'
-$api_process = Start-Process `
-    -FilePath $env:ComSpec `
-    -ArgumentList @("/d", "/s", "/c", $api_command) `
-    -WorkingDirectory $api_directory `
-    -RedirectStandardOutput $api_stdout_log `
-    -RedirectStandardError $api_stderr_log `
-    -WindowStyle Hidden `
-    -PassThru
+if (-not (Test-Api)) {
+    Stop-StaleApi
+    Set-Content -LiteralPath $api_stdout_log -Value ""
+    Set-Content -LiteralPath $api_stderr_log -Value ""
+
+    $api_command = 'call "' + $api_runner + '" --env-file="' + $EnvFile + '" src/server.ts'
+    $api_process = Start-Process `
+        -FilePath $env:ComSpec `
+        -ArgumentList @("/d", "/s", "/c", $api_command) `
+        -WorkingDirectory $api_directory `
+        -RedirectStandardOutput $api_stdout_log `
+        -RedirectStandardError $api_stderr_log `
+        -WindowStyle Hidden `
+        -PassThru
+
+    $healthy = $false
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        if (Test-Api) {
+            $healthy = $true
+            break
+        }
+        $api_process.Refresh()
+        if ($api_process.HasExited) {
+            $api_error = Get-Content -LiteralPath $api_stderr_log -Raw
+            if ([string]::IsNullOrWhiteSpace($api_error)) {
+                throw "API exited before Electron started (code $($api_process.ExitCode))"
+            }
+            throw $api_error.Trim()
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    if (-not $healthy) {
+        throw "API did not become healthy at $env:INFINITY_STORAGE_API_URL"
+    }
+}
 
 try {
-    Start-Sleep -Seconds 2
-    $api_process.Refresh()
-    if ($api_process.HasExited) {
-        $api_error = Get-Content -LiteralPath $api_stderr_log -Raw
-        if ([string]::IsNullOrWhiteSpace($api_error)) {
-            throw "API exited before Electron started (code $($api_process.ExitCode))"
-        }
-        throw $api_error.Trim()
-    }
-
     Push-Location $desktop_directory
     try {
         & npm run start

@@ -307,6 +307,20 @@ async function create_desktop_auth_challenge(): Promise<{ id: string; verifier: 
     }
 }
 
+function handle_desktop_health(
+    request: import("node:http").IncomingMessage,
+    response: import("node:http").ServerResponse,
+): boolean {
+    const url = new URL(request.url ?? "/", config.auth_url);
+    if (url.pathname !== "/desktop/health") return false;
+    if (request.method !== "GET") {
+        json_response(response, 405, { error: "method not allowed" });
+        return true;
+    }
+    json_response(response, 200, { version: 2 });
+    return true;
+}
+
 async function handle_desktop_auth_device(
     request: import("node:http").IncomingMessage,
     response: import("node:http").ServerResponse,
@@ -468,6 +482,7 @@ async function handle_desktop_bridge(
 
 const server = createServer((request, response) => {
     void (async () => {
+        if (handle_desktop_health(request, response)) return;
         if (await handle_desktop_auth_device(request, response)) return;
         if (await handle_desktop_sign_in(request, response)) return;
         if (await handle_desktop_bridge(request, response)) return;
