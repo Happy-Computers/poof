@@ -14,7 +14,6 @@ import (
 	"github.com/amaan/infinity-storage/internal/catalog"
 	"github.com/amaan/infinity-storage/internal/ingest"
 	"github.com/amaan/infinity-storage/internal/proxypool"
-	"github.com/amaan/infinity-storage/internal/s3origin"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
@@ -94,7 +93,6 @@ type RootMulti struct {
 	mu           sync.Mutex
 	entries      map[string]catalog.Entry
 	load         CatalogLoader
-	lastRefresh  time.Time
 	nextIno      uint64
 	pollInterval time.Duration
 	stopPoll     chan struct{}
@@ -144,7 +142,6 @@ func (r *RootMulti) OnAdd(ctx context.Context) {
 	for _, e := range r.entries {
 		r.addChildLocked(ctx, e)
 	}
-	r.lastRefresh = time.Now()
 	r.mu.Unlock()
 
 	if r.load != nil {
@@ -198,7 +195,6 @@ func (r *RootMulti) Create(ctx context.Context, name string, flags uint32, mode 
 }
 
 func (r *RootMulti) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	r.maybeRefresh(ctx)
 	if ch := r.GetChild(name); ch != nil {
 		if mf, ok := ch.Operations().(*multiFile); ok {
 			entry, exists := mf.entry()
@@ -217,7 +213,6 @@ func (r *RootMulti) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 }
 
 func (r *RootMulti) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	r.maybeRefresh(ctx)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	list := make([]fuse.DirEntry, 0, len(r.entries))
@@ -229,19 +224,6 @@ func (r *RootMulti) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		list = append(list, fuse.DirEntry{Name: name, Mode: mode})
 	}
 	return fs.NewListDirStream(list), 0
-}
-
-func (r *RootMulti) maybeRefresh(ctx context.Context) {
-	if r.load == nil {
-		return
-	}
-	r.mu.Lock()
-	due := time.Since(r.lastRefresh) >= time.Duration(s3origin.MinCatalogRefresh)*time.Second
-	r.mu.Unlock()
-	if !due {
-		return
-	}
-	r.refresh(ctx)
 }
 
 func (r *RootMulti) pollCatalog() {
@@ -268,7 +250,6 @@ func (r *RootMulti) refresh(ctx context.Context) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.lastRefresh = time.Now()
 
 	wanted := make(map[string]catalog.Entry, len(entries))
 	for _, e := range entries {

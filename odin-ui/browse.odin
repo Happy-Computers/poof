@@ -5,6 +5,9 @@ import "core:os"
 import "core:path/filepath"
 import "core:slice"
 import "core:strings"
+import "core:time"
+import sync_chan "core:sync/chan"
+import thread "core:thread"
 
 BrowseEntry :: struct {
 	name:   string,
@@ -13,114 +16,197 @@ BrowseEntry :: struct {
 	size:   i64,
 }
 
+BrowseEventKind :: enum {
+	Ready,
+	Entry,
+	Complete,
+	Failed,
+}
+
+BrowseEvent :: struct {
+	kind:  BrowseEventKind,
+	entry: BrowseEntry,
+	error: string,
+}
+
 Browse :: struct {
 	root:     string,
 	cwd:      string,
 	entries:  [dynamic]BrowseEntry,
 	selected: int,
 	scroll:   f32,
-	use_mock: bool,
 	error:    string,
+	loading:  bool,
+	results:  sync_chan.Chan(BrowseEvent),
+	loader:   ^thread.Thread,
 }
 
-browse_init :: proc(root: string, use_mock: bool) -> Browse {
+browse_init :: proc(root: string) -> Browse {
+	results, err := sync_chan.create(sync_chan.Chan(BrowseEvent), 512, context.allocator)
+	assert(err == .None)
+
 	b := Browse{
-		root     = root,
-		cwd      = root,
+		root     = strings.clone(root),
+		cwd      = strings.clone(root),
 		selected = -1,
-		use_mock = use_mock,
+		results  = results,
 	}
 	browse_reload(&b)
 	return b
 }
 
 browse_destroy :: proc(b: ^Browse) {
+	for b.loader != nil {
+		browse_discard_events(b)
+		if thread.is_done(b.loader) {
+			thread.join(b.loader)
+			thread.destroy(b.loader)
+			b.loader = nil
+			break
+		}
+		time.sleep(time.Millisecond)
+	}
+	browse_discard_events(b)
+	sync_chan.destroy(b.results)
 	browse_clear_entries(b)
+	delete(b.root)
+	delete(b.cwd)
+}
+
+browse_discard_events :: proc(b: ^Browse) {
+	for event, ok := sync_chan.try_recv(b.results); ok; event, ok = sync_chan.try_recv(b.results) {
+		if event.kind == .Entry {
+			browse_delete_entry(event.entry)
+		}
+	}
+}
+
+browse_delete_entry :: proc(entry: BrowseEntry) {
+	delete(entry.name)
+	delete(entry.path)
+}
+
+browse_send :: proc(results: sync_chan.Chan(BrowseEvent), event: BrowseEvent) -> bool {
+	sent := sync_chan.send(results, event)
+	if !sent && event.kind == .Entry {
+		browse_delete_entry(event.entry)
+	}
+	return sent
 }
 
 browse_clear_entries :: proc(b: ^Browse) {
-	for e in b.entries {
-		delete(e.name)
-		delete(e.path)
+	for entry in b.entries {
+		browse_delete_entry(entry)
 	}
 	clear(&b.entries)
 }
 
 browse_reload :: proc(b: ^Browse) {
+	if b.loading {
+		return
+	}
 	browse_clear_entries(b)
 	b.error = ""
 	b.selected = -1
 	b.scroll = 0
+	b.loading = true
+	b.loader = thread.create_and_start_with_poly_data2(
+		b.cwd,
+		b.results,
+		browse_load_worker,
+		name = "directory-load",
+	)
+	if b.loader == nil {
+		b.loading = false
+		b.error = "cannot start directory load"
+	}
+}
 
-	if b.use_mock {
-		browse_load_mock(b)
+browse_poll :: proc(b: ^Browse) -> bool {
+	changed := false
+	for event_count := 0; event_count < 32; event_count += 1 {
+		event, ok := sync_chan.try_recv(b.results)
+		if !ok {
+			break
+		}
+		changed = true
+		switch event.kind {
+		case .Ready:
+		case .Entry:
+			append(&b.entries, event.entry)
+		case .Complete:
+			slice.sort_by(b.entries[:], proc(a, c: BrowseEntry) -> bool {
+				if a.is_dir != c.is_dir {
+					return a.is_dir
+				}
+				return a.name < c.name
+			})
+			b.loading = false
+			if b.loader != nil {
+				thread.join(b.loader)
+				thread.destroy(b.loader)
+				b.loader = nil
+			}
+		case .Failed:
+			b.error = event.error
+			b.loading = false
+			if b.loader != nil {
+				thread.join(b.loader)
+				thread.destroy(b.loader)
+				b.loader = nil
+			}
+		}
+	}
+	return changed
+}
+
+browse_load_worker :: proc(path: string, results: sync_chan.Chan(BrowseEvent)) {
+	when ODIN_OS == .Windows {
+		browse_load_windows(path, results)
+	} else {
+		browse_load_os(path, results)
+	}
+}
+
+browse_load_os :: proc(path: string, results: sync_chan.Chan(BrowseEvent)) {
+	directory, err := os.open(path)
+	if err != nil {
+		browse_send(results, BrowseEvent{kind = .Failed, error = "cannot open mount directory"})
 		return
 	}
+	defer os.close(directory)
 
-	if b.cwd == "" || !os.is_dir(b.cwd) {
-		b.error = "path not a directory"
-		browse_load_mock(b)
-		b.use_mock = true
+	if !browse_send(results, BrowseEvent{kind = .Ready}) {
 		return
 	}
-
-	fis, rerr := os.read_all_directory_by_path(b.cwd, context.allocator)
-	if rerr != nil {
-		b.error = "read_dir failed"
-		browse_load_mock(b)
-		b.use_mock = true
-		return
-	}
-	defer os.file_info_slice_delete(fis, context.allocator)
-
-	for fi in fis {
+	iterator := os.read_directory_iterator_create(directory)
+	defer os.read_directory_iterator_destroy(&iterator)
+	for fi in os.read_directory_iterator(&iterator) {
 		if fi.name == "." || fi.name == ".." {
 			continue
 		}
-		full, jerr := filepath.join({b.cwd, fi.name})
-		if jerr != nil {
+		full, join_err := filepath.join({path, fi.name})
+		if join_err != nil {
 			continue
 		}
-		append(
-			&b.entries,
-			BrowseEntry{
+		if !browse_send(results, BrowseEvent{
+			kind  = .Entry,
+			entry = {
 				name   = strings.clone(fi.name),
 				path   = full,
 				is_dir = fi.type == .Directory,
 				size   = fi.size,
 			},
-		)
-	}
-
-	slice.sort_by(b.entries[:], proc(a, b: BrowseEntry) -> bool {
-		if a.is_dir != b.is_dir {
-			return a.is_dir
+		}) {
+			return
 		}
-		return a.name < b.name
-	})
-}
-
-browse_load_mock :: proc(b: ^Browse) {
-	mock := []BrowseEntry{
-		{name = "movies/", path = "mock:/movies", is_dir = true, size = 0},
-		{name = "shows/", path = "mock:/shows", is_dir = true, size = 0},
-		{name = "readme.txt", path = "mock:/readme.txt", is_dir = false, size = 128},
-		{name = "clip.mp4", path = "mock:/clip.mp4", is_dir = false, size = 1_048_576},
 	}
-	for m in mock {
-		append(
-			&b.entries,
-			BrowseEntry{
-				name   = strings.clone(m.name),
-				path   = strings.clone(m.path),
-				is_dir = m.is_dir,
-				size   = m.size,
-			},
-		)
+	_, iter_err := os.read_directory_iterator_error(&iterator)
+	if iter_err != nil {
+		browse_send(results, BrowseEvent{kind = .Failed, error = "cannot read mount directory"})
+		return
 	}
-	if b.error == "" {
-		b.error = "mock listing (mount path unavailable)"
-	}
+	browse_send(results, BrowseEvent{kind = .Complete})
 }
 
 browse_selected :: proc(b: Browse) -> (BrowseEntry, bool) {

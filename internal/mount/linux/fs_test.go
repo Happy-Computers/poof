@@ -5,6 +5,7 @@ package linux
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/amaan/infinity-storage/internal/catalog"
 )
@@ -45,6 +46,28 @@ func TestNewRootMultiLive(t *testing.T) {
 		t.Fatal("expected loader")
 	}
 	root.Stop()
+}
+
+func TestReaddirDoesNotRefreshCatalog(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	root := NewRootMultiLive(nil, nil, func(ctx context.Context) ([]catalog.Entry, error) {
+		<-block
+		return nil, nil
+	})
+	done := make(chan struct{})
+	go func() {
+		_, errno := root.Readdir(context.Background())
+		if errno != 0 {
+			t.Errorf("readdir: %v", errno)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("readdir waited for catalog refresh")
+	}
 }
 
 type recordingWritableFile struct {

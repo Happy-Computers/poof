@@ -27,6 +27,31 @@ func TestNewMultiWiring(t *testing.T) {
 	root.Stop()
 }
 
+func TestReaddirDoesNotRefreshCatalog(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	filesystem := NewMulti(nil, nil, func(ctx context.Context) ([]catalog.Entry, error) {
+		<-block
+		return nil, nil
+	})
+	defer filesystem.Stop()
+	done := make(chan struct{})
+	go func() {
+		status := filesystem.Readdir("/", func(name string, stat *fuse.Stat_t, offset int64) bool {
+			return true
+		}, 0, 0)
+		if status != 0 {
+			t.Errorf("readdir: %d", status)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("readdir waited for catalog refresh")
+	}
+}
+
 func TestNewSingle(t *testing.T) {
 	root := NewSingle(nil, "video.mp4", 42)
 	if root.singleName != "video.mp4" || root.singleSize != 42 {

@@ -14,7 +14,6 @@ import (
 	"github.com/amaan/infinity-storage/internal/catalog"
 	"github.com/amaan/infinity-storage/internal/ingest"
 	"github.com/amaan/infinity-storage/internal/proxypool"
-	"github.com/amaan/infinity-storage/internal/s3origin"
 	"github.com/winfsp/cgofuse/fuse"
 )
 
@@ -29,7 +28,6 @@ type InfinityStorageFS struct {
 	mu           sync.Mutex
 	entries      map[string]catalog.Entry
 	load         CatalogLoader
-	lastRefresh  time.Time
 	pollInterval time.Duration
 	stopPoll     chan struct{}
 	pollOnce     sync.Once
@@ -150,7 +148,6 @@ func (f *InfinityStorageFS) Getattr(p string, stat *fuse.Stat_t, fh uint64) int 
 		fillOwner(stat)
 		return 0
 	}
-	f.maybeRefresh()
 	f.mu.Lock()
 	entry, ok := f.entries[name]
 	f.mu.Unlock()
@@ -189,7 +186,6 @@ func (f *InfinityStorageFS) Open(p string, flags int) (int, uint64) {
 	if wantWrite {
 		return f.openForWrite(name)
 	}
-	f.maybeRefresh()
 	f.mu.Lock()
 	entry, ok := f.entries[name]
 	f.mu.Unlock()
@@ -213,7 +209,6 @@ func (f *InfinityStorageFS) openForWrite(name string) (int, uint64) {
 	if f.ingest == nil {
 		return -fuse.EROFS, ^uint64(0)
 	}
-	f.maybeRefresh()
 	f.mu.Lock()
 	entry, exists := f.entries[name]
 	f.mu.Unlock()
@@ -468,7 +463,6 @@ func (f *InfinityStorageFS) Readdir(p string, fill func(name string, stat *fuse.
 		fill(f.singleName, nil, 0)
 		return 0
 	}
-	f.maybeRefresh()
 	f.mu.Lock()
 	names := make([]string, 0, len(f.entries))
 	for name := range f.entries {
@@ -481,18 +475,6 @@ func (f *InfinityStorageFS) Readdir(p string, fill func(name string, stat *fuse.
 		}
 	}
 	return 0
-}
-
-func (f *InfinityStorageFS) maybeRefresh() {
-	if f.load == nil {
-		return
-	}
-	f.mu.Lock()
-	due := time.Since(f.lastRefresh) >= time.Duration(s3origin.MinCatalogRefresh)*time.Second
-	f.mu.Unlock()
-	if due {
-		f.refresh(context.Background())
-	}
 }
 
 func (f *InfinityStorageFS) pollCatalog() {
@@ -526,7 +508,6 @@ func (f *InfinityStorageFS) refresh(ctx context.Context) {
 		}
 	}
 	f.mu.Lock()
-	f.lastRefresh = time.Now()
 	f.entries = wanted
 	f.mu.Unlock()
 }
