@@ -12,7 +12,7 @@ const PROXY_BIN =
   process.env.INFINITY_STORAGE_PROXY_BIN ||
   path.join(REPOSITORY_ROOT, 'stream_proxy', 'zig-out', 'bin', isWindows() ? 'stream_proxy.exe' : 'stream_proxy')
 const API_URL = process.env.INFINITY_STORAGE_API_URL || 'http://127.0.0.1:3005'
-const CALLBACK_PORT = Number(process.env.INFINITY_STORAGE_CALLBACK_PORT || 9778)
+const CALLBACK_PORT = Number(process.env.INFINITY_STORAGE_CALLBACK_PORT || 0)
 const S3_BUCKET = process.env.INFINITY_STORAGE_S3_BUCKET || 'amaan-space-test-1'
 const LIVE_RELAY_URL = process.env.INFINITY_STORAGE_LIVE_RELAY_URL || ''
 
@@ -295,13 +295,12 @@ else document.getElementById('s').textContent = 'Sign-in failed: no token in red
 async function signIn() {
   if (pendingAuth) return pendingAuth.promise
   let resolvePromise, rejectPromise
-  pendingAuth = {
-    promise: new Promise((resolve, reject) => {
-      resolvePromise = resolve
-      rejectPromise = reject
-      setTimeout(() => reject(new Error('sign-in timed out')), 5 * 60_000)
-    })
-  }
+  const authPromise = new Promise((resolve, reject) => {
+    resolvePromise = resolve
+    rejectPromise = reject
+    setTimeout(() => reject(new Error('sign-in timed out')), 5 * 60_000)
+  })
+  pendingAuth = { promise: authPromise }
   const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/token') {
       let body = ''
@@ -328,9 +327,15 @@ async function signIn() {
     throw new Error(`cannot bind callback port ${CALLBACK_PORT}: ${err.message}`)
   })
   callbackServer = server
+  const address = server.address()
+  if (!address || typeof address === 'string') {
+    stopCallbackServer()
+    pendingAuth = null
+    throw new Error('callback server address unavailable')
+  }
   const signInUrl =
     `${API_URL}/desktop/sign-in?redirect=` +
-    encodeURIComponent(`http://127.0.0.1:${CALLBACK_PORT}/callback`)
+    encodeURIComponent(`http://127.0.0.1:${address.port}/callback`)
   try {
     await shell.openExternal(signInUrl)
   } catch (err) {
@@ -338,7 +343,7 @@ async function signIn() {
     pendingAuth = null
     throw err
   }
-  return pendingAuth.promise
+  return authPromise
 }
 
 async function signOut() {
