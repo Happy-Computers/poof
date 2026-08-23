@@ -87,6 +87,18 @@ async function handle_mounts(
     }
 
     if (path_match[1] !== undefined) {
+        if (request.method === "DELETE") {
+            const result = await database_pool.query(
+                "delete from infinity_storage.mounts where id = $1 and user_id = $2",
+                [path_match[1], user_id],
+            );
+            if (result.rowCount !== 1) {
+                json_response(response, 404, { error: "mount not found" });
+                return true;
+            }
+            response.writeHead(204).end();
+            return true;
+        }
         if (request.method !== "PATCH") {
             json_response(response, 405, { error: "method not allowed" });
             return true;

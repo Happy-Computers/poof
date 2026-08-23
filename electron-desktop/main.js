@@ -83,6 +83,16 @@ async function renameMountProfile(id, name) {
   return (await res.json()).mount
 }
 
+async function deleteMountProfile(id) {
+  const res = await apiFetch(`/v1/mounts/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  })
+  if (!res.ok && res.status !== 404) {
+    const body = await res.json().catch(() => null)
+    throw new Error(body?.error || `could not delete mount (${res.status})`)
+  }
+}
+
 async function createMount({ name, letter, projectId }, saveProfile = true, existingProfile = null) {
   if (!name.trim() || !projectId) {
     throw new Error('mount name and project are required')
@@ -194,9 +204,10 @@ function publicMount(m) {
   }
 }
 
-async function removeMount(id) {
+async function removeMount(id, deleteProfile = true) {
   const m = mounts.get(String(id))
   if (!m) return false
+  if (deleteProfile && m.profileId) await deleteMountProfile(m.profileId)
   mounts.delete(String(id))
   m.child.removeAllListeners('exit')
   m.child.kill()
@@ -377,6 +388,6 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', function () {
-  for (const id of [...mounts.keys()]) removeMount(id)
+  for (const id of [...mounts.keys()]) removeMount(id, false)
   if (process.platform !== 'darwin') app.quit()
 })
