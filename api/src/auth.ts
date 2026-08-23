@@ -20,11 +20,19 @@ export const auth = betterAuth({
     account: {
         storeStateStrategy: "database",
     },
+    advanced: {
+        ipAddress: {
+            ipAddressHeaders: ["x-poof-client-ip"],
+        },
+    },
     appName: "Infinity Storage",
     baseURL: config.auth_url,
     database: database_pool,
     plugins: [bearer()],
     rateLimit: {
+        customRules: {
+            "/get-session": false,
+        },
         enabled: true,
         max: 20,
         storage: "database",

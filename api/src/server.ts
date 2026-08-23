@@ -430,24 +430,6 @@ async function handle_desktop_sign_in(
     return true;
 }
 
-function parse_session_cookie(header: string | undefined): string | null {
-    if (header === undefined) return null;
-    for (const part of header.split(";")) {
-        const eq = part.indexOf("=");
-        if (eq === -1) continue;
-        const name = part.slice(0, eq).trim();
-        if (!name.endsWith(".session_token")) continue;
-        const value = part.slice(eq + 1).trim();
-        if (value.length === 0) return null;
-        try {
-            return decodeURIComponent(value);
-        } catch {
-            return null;
-        }
-    }
-    return null;
-}
-
 async function handle_desktop_bridge(
     request: import("node:http").IncomingMessage,
     response: import("node:http").ServerResponse,
@@ -459,18 +441,15 @@ async function handle_desktop_bridge(
         html_response(response, 400, "<!doctype html><title>Infinity Storage</title><p>Invalid sign-in challenge.</p>");
         return true;
     }
-    const [session, token] = await Promise.all([
-        auth.api.getSession({ headers: request_headers(request) }).catch(() => null),
-        Promise.resolve(parse_session_cookie(request.headers.cookie)),
-    ]);
-    if (session === null || token === null) {
+    const session = await auth.api.getSession({ headers: request_headers(request) }).catch(() => null);
+    if (session === null) {
         html_response(response, 401, "<!doctype html><title>Infinity Storage</title><p>Sign-in failed. Close this tab and try again.</p>");
         return true;
     }
     const result = await database_pool.query(
         `update infinity_storage_auth.desktop_auth_challenges set session_token = $1
          where id = $2 and expires_at > now() and session_token is null`,
-        [token, challenge],
+        [session.session.token, challenge],
     );
     if (result.rowCount !== 1) {
         html_response(response, 410, "<!doctype html><title>Infinity Storage</title><p>Sign-in challenge expired.</p>");
@@ -481,6 +460,9 @@ async function handle_desktop_bridge(
 }
 
 const server = createServer((request, response) => {
+    if (request.socket.remoteAddress !== undefined) {
+        request.headers["x-poof-client-ip"] = request.socket.remoteAddress;
+    }
     void (async () => {
         if (handle_desktop_health(request, response)) return;
         if (await handle_desktop_auth_device(request, response)) return;

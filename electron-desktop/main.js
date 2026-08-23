@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron')
 const { spawn } = require('node:child_process')
 const fs = require('node:fs/promises')
 const path = require('node:path')
@@ -23,6 +23,35 @@ let legacyMountDirectoriesCleaned = false
 
 let sessionToken = null
 let pendingAuth = null
+
+function sessionTokenPath() {
+  return path.join(app.getPath('userData'), 'session-token.enc')
+}
+
+async function storeSessionToken(token) {
+  if (!token) {
+    await fs.rm(sessionTokenPath(), { force: true })
+    return
+  }
+  if (!safeStorage.isEncryptionAvailable()) return
+  const encrypted = safeStorage.encryptString(token)
+  await fs.writeFile(sessionTokenPath(), encrypted, { mode: 0o600 })
+}
+
+async function loadSessionToken() {
+  if (!safeStorage.isEncryptionAvailable()) return
+  try {
+    const encrypted = await fs.readFile(sessionTokenPath())
+    sessionToken = safeStorage.decryptString(encrypted)
+    if (!await getSession()) {
+      sessionToken = null
+      await storeSessionToken(null)
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.error(`load session token: ${error.message}`)
+    sessionToken = null
+  }
+}
 
 function isWindows() {
   return process.platform === 'win32'
@@ -334,7 +363,12 @@ async function completeDesktopSignIn() {
     }
     sessionToken = result.token
     const session = await getSession()
-    if (!session) throw new Error('desktop session invalid')
+    if (!session) {
+      sessionToken = null
+      await storeSessionToken(null)
+      throw new Error('desktop session invalid')
+    }
+    await storeSessionToken(sessionToken)
     return session
   }
   throw new Error('sign-in timed out')
@@ -358,6 +392,7 @@ async function signOut() {
     } catch {}
   }
   sessionToken = null
+  await storeSessionToken(null)
 }
 
 function registerIpc() {
@@ -388,7 +423,8 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'))
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  await loadSessionToken()
   registerIpc()
   createWindow()
 

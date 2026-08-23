@@ -131,6 +131,7 @@ function formatSize(n: number) {
 }
 
 const ALL_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("")
+const DIRECTORY_REFRESH_MS = 1_000
 
 export default function App() {
   const [session, setSession] = useState<SessionInfo | null | undefined>(
@@ -214,11 +215,15 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (selected) browse(selected.target)
-    else {
+    if (!selected) {
       setCwd("")
       setEntries([])
+      return
     }
+    const refresh = () => void browse(selected.target)
+    refresh()
+    const interval = window.setInterval(refresh, DIRECTORY_REFRESH_MS)
+    return () => window.clearInterval(interval)
   }, [selected, browse])
 
   const freeLetters = useMemo(
