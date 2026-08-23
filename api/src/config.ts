@@ -5,10 +5,10 @@ const SECRET_BYTES_MIN = 32;
 export type Config = Readonly<{
     auth_url: string;
     database_url: string;
-    email_from: string;
+    google_client_id: string;
+    google_client_secret: string;
     host: string;
     port: number;
-    resend_api_key: string;
     secret: string;
 }>;
 
@@ -67,10 +67,10 @@ export function load_config(env: NodeJS.ProcessEnv): Config {
     return {
         auth_url,
         database_url,
-        email_from: require_env(env, "AUTH_EMAIL_FROM"),
+        google_client_id: require_env(env, "GOOGLE_CLIENT_ID"),
+        google_client_secret: require_env(env, "GOOGLE_CLIENT_SECRET"),
         host: parse_host(env.HOST ?? "127.0.0.1"),
         port: parse_port(env.PORT ?? "3005"),
-        resend_api_key: require_env(env, "RESEND_API_KEY"),
         secret,
     };
 }

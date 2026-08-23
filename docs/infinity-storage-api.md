@@ -44,6 +44,13 @@ pnpm start
 Better Auth is served under `/api/auth`. The reset email opens `/reset-password`, which accepts a
 new 12–128 character password and revokes existing sessions.
 
+## Relay authority
+
+`GET /v1/libraries/:project-id/authorize` requires a bearer session and returns `204` only when the
+project belongs to that account. Configure the live relay with `--authority-url` pointing to this
+API. The relay uses this endpoint before serving any in-progress catalog or range request, allowing
+another device signed into the same account to see accepted file ranges before S3 upload finishes.
+
 Then start Electron with the matching API origin:
 
 ```bash

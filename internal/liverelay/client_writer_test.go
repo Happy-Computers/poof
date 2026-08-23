@@ -54,6 +54,16 @@ func TestClientRoutesRangeToPublishingWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := writerManager.Close(closeCtx); err != nil {
+			t.Errorf("close writer manager: %v", err)
+		}
+		if err := observerManager.Close(closeCtx); err != nil {
+			t.Errorf("close observer manager: %v", err)
+		}
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	writer.Start(ctx, writerManager)

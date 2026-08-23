@@ -15,21 +15,21 @@ import (
 )
 
 const (
-	MaxActiveWrites       = 8
-	MaxConcurrentUploads  = 2
-	PartBytes             = 16 * 1024 * 1024
-	BuffersPerWrite       = 2
-	MaxBufferBytes        = 64 * 1024 * 1024
-	MaxSpoolBytes         = 64 * 1024 * 1024 * 1024
-	MaxPartsPerObject     = 4096
-	MaxFileBytes          = 64 * 1024 * 1024 * 1024
-	MaxPeerRangeBytes     = 8 * 1024 * 1024
-	MaxPeerRangeReads     = 8
-	UnwrittenRangeWait    = 30 * time.Second
-	SourceHandoffGrace    = 30 * time.Second
-	PartUploadAttempts    = 3
-	MaxCatalogFiles       = 256
-	MaxBasenameBytes      = 255
+	MaxActiveWrites      = 8
+	MaxConcurrentUploads = 2
+	PartBytes            = 16 * 1024 * 1024
+	BuffersPerWrite      = 2
+	MaxBufferBytes       = 64 * 1024 * 1024
+	MaxSpoolBytes        = 64 * 1024 * 1024 * 1024
+	MaxPartsPerObject    = 4096
+	MaxFileBytes         = 64 * 1024 * 1024 * 1024
+	MaxPeerRangeBytes    = 8 * 1024 * 1024
+	MaxPeerRangeReads    = 8
+	UnwrittenRangeWait   = 30 * time.Second
+	SourceHandoffGrace   = 30 * time.Second
+	PartUploadAttempts   = 3
+	MaxCatalogFiles      = 256
+	MaxBasenameBytes     = 255
 )
 
 var (
@@ -119,18 +119,18 @@ type File struct {
 	spool         *os.File
 	spoolReleased bool
 
-	mu        sync.Mutex
-	changed   *sync.Cond
-	state     State
-	accepted  uint64
-	uploaded  uint64
-	hash      hashState
-	closed    bool
-	active    bool
-	started   bool
-	writers   int
-	upload    Upload
-	uploadErr error
+	mu                  sync.Mutex
+	changed             *sync.Cond
+	state               State
+	accepted            uint64
+	uploaded            uint64
+	hash                hashState
+	closed              bool
+	active              bool
+	started             bool
+	writers             int
+	upload              Upload
+	uploadErr           error
 	pendingSpoolRelease uint64
 }
 
@@ -270,6 +270,22 @@ func (m *Manager) Forget(file *File) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.forgetLocked(file)
+}
+
+func (m *Manager) Close(ctx context.Context) error {
+	m.mu.Lock()
+	files := make([]*File, 0, len(m.files))
+	for _, file := range m.files {
+		files = append(files, file)
+	}
+	m.mu.Unlock()
+	var closeErr error
+	for _, file := range files {
+		if err := file.Abort(ctx); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
 }
 
 func (m *Manager) Lookup(name string) (*File, bool) {
@@ -687,8 +703,15 @@ func (f *File) runUpload() {
 		return
 	}
 	f.mu.Lock()
-	f.upload = upload
+	aborted = f.state == StateAborting || f.state == StateAborted
+	if !aborted {
+		f.upload = upload
+	}
 	f.mu.Unlock()
+	if aborted {
+		_ = upload.Abort(context.Background())
+		return
+	}
 
 	buffer := make([]byte, PartBytes)
 	parts := make([]Part, 0, MaxPartsPerObject)

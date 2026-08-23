@@ -99,6 +99,13 @@ func newTestManager(t *testing.T, store Store) *Manager {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := manager.Close(ctx); err != nil {
+			t.Errorf("close manager: %v", err)
+		}
+	})
 	return manager
 }
 
@@ -205,6 +212,28 @@ func TestAbortedIngestReleasesSpool(t *testing.T) {
 	}
 	if _, err := second.WriteAt([]byte("abc"), 0); err != nil {
 		t.Fatalf("spool capacity was not released: %v", err)
+	}
+}
+
+func TestManagerCloseAbortsOpenFiles(t *testing.T) {
+	manager := newTestManager(t, &memoryStore{})
+	file, err := manager.Reserve("clip.mp4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte("abc"), 0); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := manager.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := file.Snapshot(); snapshot.State != StateAborted {
+		t.Fatalf("state=%s", snapshot.State)
+	}
+	if _, err := os.Stat(file.path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("spool remains: %v", err)
 	}
 }
 

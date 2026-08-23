@@ -3,7 +3,6 @@ package liverelay
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -35,19 +34,20 @@ type Stream struct {
 }
 
 type Server struct {
-	mu      sync.Mutex
-	token   string
-	streams map[string]map[string]Stream
-	queues  map[string]map[string]chan *ticket
-	pending map[string]*ticket
+	mu         sync.Mutex
+	authorizer Authorizer
+	streams    map[string]map[string]Stream
+	queues     map[string]map[string]chan *ticket
+	pending    map[string]*ticket
 }
 
 type ticket struct {
-	id     string
-	name   string
-	start  uint64
-	length uint64
-	result chan rangeResult
+	id      string
+	library string
+	name    string
+	start   uint64
+	length  uint64
+	result  chan rangeResult
 }
 
 type rangeResult struct {
@@ -66,23 +66,31 @@ func NewServer(token string) (*Server, error) {
 	if token == "" {
 		return nil, fmt.Errorf("live relay: token required")
 	}
+	return NewServerWithAuthorizer(staticAuthorizer{token: token})
+}
+
+func NewServerWithAuthorizer(authorizer Authorizer) (*Server, error) {
+	if authorizer == nil {
+		return nil, fmt.Errorf("live relay: authorizer required")
+	}
 	return &Server{
-		token:   token,
-		streams: make(map[string]map[string]Stream),
-		queues:  make(map[string]map[string]chan *ticket),
-		pending: make(map[string]*ticket),
+		authorizer: authorizer,
+		streams:    make(map[string]map[string]Stream),
+		queues:     make(map[string]map[string]chan *ticket),
+		pending:    make(map[string]*ticket),
 	}, nil
 }
 
 func (s *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) {
-	if !s.authorized(request) {
-		response.Header().Set("WWW-Authenticate", "Bearer")
-		http.Error(response, "unauthorized", http.StatusUnauthorized)
+	parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "v1" || !validName(parts[2]) {
+		http.NotFound(response, request)
 		return
 	}
-	parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
-	if len(parts) < 3 || parts[0] != "v1" {
-		http.NotFound(response, request)
+	token := bearerToken(request)
+	if err := s.authorizer.Authorize(request.Context(), token, parts[2]); err != nil {
+		response.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(response, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	switch parts[1] {
@@ -170,7 +178,7 @@ func (s *Server) serveWriters(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	if len(parts) == 3 && parts[1] == "ranges" && request.Method == http.MethodPut {
-		s.complete(response, request, parts[2])
+		s.complete(response, request, parts[0], parts[2])
 		return
 	}
 	http.NotFound(response, request)
@@ -216,7 +224,7 @@ func (s *Server) publish(library string, stream Stream) {
 }
 
 func (s *Server) requestRange(ctx context.Context, library, writerID, name string, start, length uint64) ([]byte, error) {
-	ticket, err := newTicket(name, start, length)
+	ticket, err := newTicket(library, name, start, length)
 	if err != nil {
 		return nil, err
 	}
@@ -267,11 +275,11 @@ func (s *Server) next(ctx context.Context, library, writerID string) (rangeJob, 
 	}
 }
 
-func (s *Server) complete(response http.ResponseWriter, request *http.Request, id string) {
+func (s *Server) complete(response http.ResponseWriter, request *http.Request, library string, id string) {
 	s.mu.Lock()
 	ticket, ok := s.pending[id]
 	s.mu.Unlock()
-	if !ok {
+	if !ok || ticket.library != library {
 		http.Error(response, "unknown range", http.StatusNotFound)
 		return
 	}
@@ -317,12 +325,13 @@ func (s *Server) remove(id string) {
 	delete(s.pending, id)
 }
 
-func (s *Server) authorized(request *http.Request) bool {
-	value := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
-	if len(value) != len(s.token) {
-		return false
+func bearerToken(request *http.Request) string {
+	value := request.Header.Get("Authorization")
+	token, ok := strings.CutPrefix(value, "Bearer ")
+	if !ok || token == "" {
+		return ""
 	}
-	return subtle.ConstantTimeCompare([]byte(value), []byte(s.token)) == 1
+	return token
 }
 
 func (s *Server) writeJSON(response http.ResponseWriter, status int, value any) {
@@ -331,17 +340,18 @@ func (s *Server) writeJSON(response http.ResponseWriter, status int, value any) 
 	_ = json.NewEncoder(response).Encode(value)
 }
 
-func newTicket(name string, start, length uint64) (*ticket, error) {
+func newTicket(library string, name string, start, length uint64) (*ticket, error) {
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return nil, err
 	}
 	return &ticket{
-		id:     hex.EncodeToString(random[:]),
-		name:   name,
-		start:  start,
-		length: length,
-		result: make(chan rangeResult, 1),
+		id:      hex.EncodeToString(random[:]),
+		library: library,
+		name:    name,
+		start:   start,
+		length:  length,
+		result:  make(chan rangeResult, 1),
 	}, nil
 }
 
