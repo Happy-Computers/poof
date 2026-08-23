@@ -43,10 +43,10 @@ pnpm i
 pnpm start
 ```
 
-Better Auth is served under `/api/auth`. The reset email opens `/reset-password`, which accepts a
-new 12–128 character password and revokes existing sessions. `GET /v1/mounts` returns account mount
-profiles. `POST /v1/mounts` creates or updates one profile for a project. `PATCH /v1/mounts/:id` renames
-one profile.
+Better Auth is served under `/api/auth`. Desktop sign-in uses a five-minute database-backed device
+challenge, so Linux and Windows never depend on browser access to an app-local callback port. OAuth
+state also uses the shared database. `GET /v1/mounts` returns account mount profiles. `POST /v1/mounts`
+creates or updates one profile for a project. `PATCH /v1/mounts/:id` renames one profile.
 
 ## Relay authority
 

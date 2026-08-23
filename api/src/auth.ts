@@ -17,6 +17,9 @@ export const database_pool = new Pool({
 const DESKTOP_ORIGIN = process.env.DESKTOP_ORIGIN ?? "http://127.0.0.1:9778";
 
 export const auth = betterAuth({
+    account: {
+        storeStateStrategy: "database",
+    },
     appName: "Infinity Storage",
     baseURL: config.auth_url,
     database: database_pool,

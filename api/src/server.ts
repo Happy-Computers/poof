@@ -1,11 +1,15 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { toNodeHandler } from "better-auth/node";
 import { auth, database_pool } from "./auth.js";
 import { load_config } from "./config.js";
 
 const SHUTDOWN_TIMEOUT_MS = 5_000;
+const DESKTOP_AUTH_CHALLENGE_MAX = 1_024;
+const DESKTOP_AUTH_TTL_MS = 5 * 60_000;
+const DESKTOP_AUTH_VERIFIER_BYTES = 32;
 const MOUNT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,99}$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const config = load_config(process.env);
 const auth_handler = toNodeHandler(auth);
 
@@ -14,7 +18,10 @@ function json_response(
     status: number,
     body: unknown,
 ): void {
-    response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+    response.writeHead(status, {
+        "cache-control": "no-store",
+        "content-type": "application/json; charset=utf-8",
+    });
     response.end(JSON.stringify(body));
 }
 
@@ -267,15 +274,95 @@ function html_response(
     response.end(body);
 }
 
-function desktop_callback_url(redirect: string): string {
-    const callback = new URL("/desktop/bridge", config.auth_url);
-    callback.searchParams.set("redirect", redirect);
-    return callback.toString();
+function desktop_auth_verifier_hash(verifier: string): Buffer {
+    return createHash("sha256").update(verifier, "utf8").digest();
 }
 
-function desktop_callback_is_valid(redirect: string | null): redirect is string {
-    if (redirect === null) return false;
-    return /^http:\/\/127\.0\.0\.1:\d+\/callback$/.test(redirect);
+async function create_desktop_auth_challenge(): Promise<{ id: string; verifier: string } | null> {
+    const id = randomUUID();
+    const verifier = randomBytes(DESKTOP_AUTH_VERIFIER_BYTES).toString("base64url");
+    const verifier_hash = desktop_auth_verifier_hash(verifier);
+    const expires_at = new Date(Date.now() + DESKTOP_AUTH_TTL_MS);
+    const client = await database_pool.connect();
+    try {
+        await client.query("begin");
+        await client.query("lock table infinity_storage_auth.desktop_auth_challenges in share row exclusive mode");
+        await client.query("delete from infinity_storage_auth.desktop_auth_challenges where expires_at <= now()");
+        const count = await client.query<{ count: string }>("select count(*) as count from infinity_storage_auth.desktop_auth_challenges");
+        if (Number(count.rows[0]?.count ?? DESKTOP_AUTH_CHALLENGE_MAX) >= DESKTOP_AUTH_CHALLENGE_MAX) {
+            await client.query("rollback");
+            return null;
+        }
+        await client.query(
+            "insert into infinity_storage_auth.desktop_auth_challenges (id, verifier_hash, expires_at) values ($1, $2, $3)",
+            [id, verifier_hash, expires_at],
+        );
+        await client.query("commit");
+        return { id, verifier };
+    } catch (error) {
+        await client.query("rollback");
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+async function handle_desktop_auth_device(
+    request: import("node:http").IncomingMessage,
+    response: import("node:http").ServerResponse,
+): Promise<boolean> {
+    const url = new URL(request.url ?? "/", config.auth_url);
+    if (url.pathname === "/desktop/device/start") {
+        if (request.method !== "POST") {
+            json_response(response, 405, { error: "method not allowed" });
+            return true;
+        }
+        const challenge = await create_desktop_auth_challenge();
+        if (challenge === null) {
+            json_response(response, 503, { error: "too many pending desktop sign-ins" });
+            return true;
+        }
+        json_response(response, 201, challenge);
+        return true;
+    }
+    if (url.pathname !== "/desktop/device/token") return false;
+    if (request.method !== "POST") {
+        json_response(response, 405, { error: "method not allowed" });
+        return true;
+    }
+    const body = await request_body(request) as { id?: unknown; verifier?: unknown };
+    const id = typeof body.id === "string" ? body.id : "";
+    const verifier = typeof body.verifier === "string" ? body.verifier : "";
+    if (!UUID_PATTERN.test(id) || !/^[A-Za-z0-9_-]{43}$/.test(verifier)) {
+        json_response(response, 400, { error: "invalid desktop sign-in challenge" });
+        return true;
+    }
+    const verifier_hash = desktop_auth_verifier_hash(verifier);
+    const completed = await database_pool.query<{ session_token: string }>(
+        `delete from infinity_storage_auth.desktop_auth_challenges
+         where id = $1 and verifier_hash = $2 and expires_at > now() and session_token is not null
+         returning session_token`,
+        [id, verifier_hash],
+    );
+    if (completed.rowCount === 1) {
+        json_response(response, 200, { token: completed.rows[0]?.session_token });
+        return true;
+    }
+    const pending = await database_pool.query(
+        `select 1 from infinity_storage_auth.desktop_auth_challenges
+         where id = $1 and verifier_hash = $2 and expires_at > now()`,
+        [id, verifier_hash],
+    );
+    json_response(response, pending.rowCount === 1 ? 202 : 404, pending.rowCount === 1
+        ? { pending: true }
+        : { error: "desktop sign-in challenge expired" });
+    return true;
+}
+
+function desktop_callback_url(challenge: string): string {
+    const callback = new URL("/desktop/bridge", config.auth_url);
+    callback.searchParams.set("challenge", challenge);
+    return callback.toString();
 }
 
 function desktop_sign_in_page(callback_url: string): string {
@@ -312,12 +399,20 @@ async function handle_desktop_sign_in(
         json_response(response, 405, { error: "method not allowed" });
         return true;
     }
-    const redirect = url.searchParams.get("redirect");
-    if (desktop_callback_is_valid(redirect) === false) {
-        html_response(response, 400, "<!doctype html><title>Infinity Storage</title><p>Invalid sign-in redirect.</p>");
+    const challenge = url.searchParams.get("challenge") ?? "";
+    if (!UUID_PATTERN.test(challenge)) {
+        html_response(response, 400, "<!doctype html><title>Infinity Storage</title><p>Invalid sign-in challenge.</p>");
         return true;
     }
-    html_response(response, 200, desktop_sign_in_page(desktop_callback_url(redirect)));
+    const active = await database_pool.query(
+        "select 1 from infinity_storage_auth.desktop_auth_challenges where id = $1 and expires_at > now()",
+        [challenge],
+    );
+    if (active.rowCount !== 1) {
+        html_response(response, 410, "<!doctype html><title>Infinity Storage</title><p>Sign-in challenge expired.</p>");
+        return true;
+    }
+    html_response(response, 200, desktop_sign_in_page(desktop_callback_url(challenge)));
     return true;
 }
 
@@ -327,9 +422,13 @@ function parse_session_cookie(header: string | undefined): string | null {
         const eq = part.indexOf("=");
         if (eq === -1) continue;
         const name = part.slice(0, eq).trim();
-        if (name.endsWith(".session_token")) {
-            const value = part.slice(eq + 1).trim();
-            return value.length > 0 ? value : null;
+        if (!name.endsWith(".session_token")) continue;
+        const value = part.slice(eq + 1).trim();
+        if (value.length === 0) return null;
+        try {
+            return decodeURIComponent(value);
+        } catch {
+            return null;
         }
     }
     return null;
@@ -341,13 +440,11 @@ async function handle_desktop_bridge(
 ): Promise<boolean> {
     const url = new URL(request.url ?? "/", config.auth_url);
     if (url.pathname !== "/desktop/bridge") return false;
-
-    const redirect = url.searchParams.get("redirect");
-    if (desktop_callback_is_valid(redirect) === false) {
-        html_response(response, 400, "<!doctype html><title>Infinity Storage</title><p>Invalid bridge redirect.</p>");
+    const challenge = url.searchParams.get("challenge") ?? "";
+    if (!UUID_PATTERN.test(challenge)) {
+        html_response(response, 400, "<!doctype html><title>Infinity Storage</title><p>Invalid sign-in challenge.</p>");
         return true;
     }
-
     const [session, token] = await Promise.all([
         auth.api.getSession({ headers: request_headers(request) }).catch(() => null),
         Promise.resolve(parse_session_cookie(request.headers.cookie)),
@@ -356,18 +453,22 @@ async function handle_desktop_bridge(
         html_response(response, 401, "<!doctype html><title>Infinity Storage</title><p>Sign-in failed. Close this tab and try again.</p>");
         return true;
     }
-
-    const target = `${redirect}#token=${encodeURIComponent(token)}`;
-    html_response(
-        response,
-        200,
-        `<!doctype html><title>Infinity Storage</title><p>Signing you in…</p><script>location.replace(${JSON.stringify(target)})</script>`,
+    const result = await database_pool.query(
+        `update infinity_storage_auth.desktop_auth_challenges set session_token = $1
+         where id = $2 and expires_at > now() and session_token is null`,
+        [token, challenge],
     );
+    if (result.rowCount !== 1) {
+        html_response(response, 410, "<!doctype html><title>Infinity Storage</title><p>Sign-in challenge expired.</p>");
+        return true;
+    }
+    html_response(response, 200, "<!doctype html><title>Infinity Storage</title><p>Signed in. Return to Infinity Storage.</p>");
     return true;
 }
 
 const server = createServer((request, response) => {
     void (async () => {
+        if (await handle_desktop_auth_device(request, response)) return;
         if (await handle_desktop_sign_in(request, response)) return;
         if (await handle_desktop_bridge(request, response)) return;
         if (await handle_library_authorization(request, response)) return;

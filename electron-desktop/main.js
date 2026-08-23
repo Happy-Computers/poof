@@ -1,7 +1,6 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron')
 const { spawn } = require('node:child_process')
 const fs = require('node:fs/promises')
-const http = require('node:http')
 const path = require('node:path')
 
 const REPOSITORY_ROOT = path.resolve(__dirname, '..')
@@ -12,7 +11,8 @@ const PROXY_BIN =
   process.env.INFINITY_STORAGE_PROXY_BIN ||
   path.join(REPOSITORY_ROOT, 'stream_proxy', 'zig-out', 'bin', isWindows() ? 'stream_proxy.exe' : 'stream_proxy')
 const API_URL = process.env.INFINITY_STORAGE_API_URL || 'http://127.0.0.1:3005'
-const CALLBACK_PORT = Number(process.env.INFINITY_STORAGE_CALLBACK_PORT || 0)
+const DESKTOP_AUTH_POLL_INTERVAL_MS = 1000
+const DESKTOP_AUTH_POLL_MAX = 300
 const S3_BUCKET = process.env.INFINITY_STORAGE_S3_BUCKET || 'amaan-space-test-1'
 const LIVE_RELAY_URL = process.env.INFINITY_STORAGE_LIVE_RELAY_URL || ''
 
@@ -20,7 +20,6 @@ const mounts = new Map()
 let nextId = 1
 
 let sessionToken = null
-let callbackServer = null
 let pendingAuth = null
 
 function isWindows() {
@@ -277,73 +276,49 @@ async function createProject(name) {
   return (await res.json()).project
 }
 
-function stopCallbackServer() {
-  if (callbackServer) {
-    callbackServer.close()
-    callbackServer = null
-  }
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
-const CALLBACK_PAGE = `<!doctype html><meta charset="utf-8"><title>Signed in</title>
-<body><p id="s">Completing sign-in…</p><script>
-const m = location.hash.match(/token=([^&]+)/)
-if (m) fetch('/token', { method: 'POST', body: decodeURIComponent(m[1]) })
-  .then(() => { document.getElementById('s').textContent = 'Signed in. Return to Infinity Storage.' })
-else document.getElementById('s').textContent = 'Sign-in failed: no token in redirect.'
-</script></body>`
+async function completeDesktopSignIn() {
+  const start = await apiFetch('/desktop/device/start', { method: 'POST' })
+  if (!start.ok) throw new Error(`could not start desktop sign-in (${start.status})`)
+  const challenge = await start.json()
+  if (typeof challenge.id !== 'string' || typeof challenge.verifier !== 'string') {
+    throw new Error('desktop sign-in challenge invalid')
+  }
+  await shell.openExternal(
+    `${API_URL}/desktop/sign-in?challenge=${encodeURIComponent(challenge.id)}`
+  )
+  for (let attempt = 0; attempt < DESKTOP_AUTH_POLL_MAX; attempt++) {
+    await wait(DESKTOP_AUTH_POLL_INTERVAL_MS)
+    const response = await apiFetch('/desktop/device/token', {
+      method: 'POST',
+      body: challenge
+    })
+    if (response.status === 202) continue
+    if (!response.ok) throw new Error(`desktop sign-in failed (${response.status})`)
+    const result = await response.json()
+    if (typeof result.token !== 'string' || result.token.length === 0) {
+      throw new Error('desktop sign-in token invalid')
+    }
+    sessionToken = result.token
+    const session = await getSession()
+    if (!session) throw new Error('desktop session invalid')
+    return session
+  }
+  throw new Error('sign-in timed out')
+}
 
 async function signIn() {
   if (pendingAuth) return pendingAuth.promise
-  let resolvePromise, rejectPromise
-  const authPromise = new Promise((resolve, reject) => {
-    resolvePromise = resolve
-    rejectPromise = reject
-    setTimeout(() => reject(new Error('sign-in timed out')), 5 * 60_000)
-  })
-  pendingAuth = { promise: authPromise }
-  const server = http.createServer((req, res) => {
-    if (req.method === 'POST' && req.url === '/token') {
-      let body = ''
-      req.on('data', (c) => {
-        body += c
-        if (body.length > 4096) req.destroy()
-      })
-      req.on('end', () => {
-        res.writeHead(200).end()
-        sessionToken = body.trim()
-        stopCallbackServer()
-        getSession().then(resolvePromise, rejectPromise)
-        pendingAuth = null
-      })
-      return
-    }
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(CALLBACK_PAGE)
-  })
-  await new Promise((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(CALLBACK_PORT, '127.0.0.1', resolve)
-  }).catch((err) => {
-    pendingAuth = null
-    throw new Error(`cannot bind callback port ${CALLBACK_PORT}: ${err.message}`)
-  })
-  callbackServer = server
-  const address = server.address()
-  if (!address || typeof address === 'string') {
-    stopCallbackServer()
-    pendingAuth = null
-    throw new Error('callback server address unavailable')
-  }
-  const signInUrl =
-    `${API_URL}/desktop/sign-in?redirect=` +
-    encodeURIComponent(`http://127.0.0.1:${address.port}/callback`)
+  const promise = completeDesktopSignIn()
+  pendingAuth = { promise }
   try {
-    await shell.openExternal(signInUrl)
-  } catch (err) {
-    stopCallbackServer()
-    pendingAuth = null
-    throw err
+    return await promise
+  } finally {
+    if (pendingAuth?.promise === promise) pendingAuth = null
   }
-  return authPromise
 }
 
 async function signOut() {
