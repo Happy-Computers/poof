@@ -289,12 +289,15 @@ void (async () => {
         credentials: "same-origin",
         body: ${JSON.stringify(body)},
     });
-    if (!response.ok) throw new Error("sign-in request failed");
+    if (!response.ok) {
+        const detail = await response.text();
+        throw new Error("sign-in request failed (" + response.status + "): " + detail.slice(0, 300));
+    }
     const payload = await response.json();
     if (typeof payload.url !== "string") throw new Error("sign-in URL missing");
     location.assign(payload.url);
-})().catch(() => {
-    document.getElementById("status").textContent = "Could not start sign-in. Return to Infinity Storage.";
+})().catch((error) => {
+    document.getElementById("status").textContent = error instanceof Error ? error.message : "Could not start sign-in.";
 });
 </script>`;
 }
