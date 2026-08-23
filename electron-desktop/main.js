@@ -57,8 +57,12 @@ function isWindows() {
   return process.platform === 'win32'
 }
 
-function mountTarget(m) {
+function mountPoint(m) {
   return isWindows() ? `${m.letter}:` : m.mountDir
+}
+
+function mountBrowseTarget(m) {
+  return isWindows() ? `${m.letter}:\\` : m.mountDir
 }
 
 function nextWindowsLetter() {
@@ -154,7 +158,7 @@ async function createMountProcess({ name, letter, projectId }, saveProfile, exis
   const tokenFile = await createRelayTokenFile(id)
   const args = [
     '-mount',
-    mountTarget({ letter, mountDir }),
+    mountPoint({ letter, mountDir }),
     '-bucket',
     S3_BUCKET,
     '-prefix',
@@ -203,7 +207,7 @@ async function createMountProcess({ name, letter, projectId }, saveProfile, exis
     projectId: project.id,
     profileId: profile?.id,
     mountDir,
-    target: mountTarget({ letter, mountDir }),
+    target: mountBrowseTarget({ letter, mountDir }),
     child,
     tokenFile
   }

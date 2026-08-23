@@ -158,7 +158,12 @@ export default function App() {
   const [renameName, setRenameName] = useState("")
 
   const refreshMounts = useCallback(async () => {
-    setMounts(await window.poof.listMounts())
+    const next = await window.poof.listMounts()
+    setMounts(next)
+    setSelected((current) => {
+      if (current) return next.find((mount) => mount.id === current.id) ?? next[0] ?? null
+      return next[0] ?? null
+    })
   }, [])
 
   const refreshProjects = useCallback(async () => {
