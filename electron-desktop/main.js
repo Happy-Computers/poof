@@ -1,6 +1,10 @@
 const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron')
 const { spawn } = require('node:child_process')
+const { randomBytes } = require('node:crypto')
+const { createReadStream } = require('node:fs')
 const fs = require('node:fs/promises')
+const http = require('node:http')
+const os = require('node:os')
 const path = require('node:path')
 
 const REPOSITORY_ROOT = path.resolve(__dirname, '..')
@@ -13,6 +17,8 @@ const PROXY_BIN =
 const API_URL = process.env.INFINITY_STORAGE_API_URL || 'http://127.0.0.1:3005'
 const DESKTOP_AUTH_POLL_INTERVAL_MS = 1000
 const DESKTOP_AUTH_POLL_MAX = 300
+const FILE_STREAM_MAX = 16
+const FILE_STREAM_TTL_MS = 60 * 60_000
 const S3_BUCKET = process.env.INFINITY_STORAGE_S3_BUCKET || 'amaan-space-test-1'
 const LIVE_RELAY_URL = process.env.INFINITY_STORAGE_LIVE_RELAY_URL || ''
 
@@ -23,6 +29,9 @@ let legacyMountDirectoriesCleaned = false
 
 let sessionToken = null
 let pendingAuth = null
+let fileServer = null
+let fileServerStart = null
+const fileStreams = new Map()
 
 function sessionTokenPath() {
   return path.join(app.getPath('userData'), 'session-token.enc')
@@ -302,6 +311,129 @@ async function listDir(dir) {
   return { path: dir, entries }
 }
 
+function isWsl() {
+  return process.platform === 'linux' && Boolean(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP)
+}
+
+function wslHostAddress() {
+  for (const addresses of Object.values(os.networkInterfaces())) {
+    for (const address of addresses || []) {
+      if (address.family === 'IPv4' && !address.internal) return address.address
+    }
+  }
+  throw new Error('WSL network address unavailable')
+}
+
+function fileMimeType(filePath) {
+  switch (path.extname(filePath).toLowerCase()) {
+    case '.mp4': return 'video/mp4'
+    case '.m4v': return 'video/x-m4v'
+    case '.mov': return 'video/quicktime'
+    case '.webm': return 'video/webm'
+    case '.txt': return 'text/plain; charset=utf-8'
+    default: return 'application/octet-stream'
+  }
+}
+
+function parseFileRange(value, size) {
+  if (!value) return { start: 0, end: size - 1, partial: false }
+  const match = /^bytes=([0-9]+)-([0-9]*)$/.exec(value)
+  if (!match) return null
+  const start = Number(match[1])
+  const end = match[2] ? Number(match[2]) : size - 1
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return null
+  if (start < 0 || start >= size || end < start || end >= size) return null
+  return { start, end, partial: true }
+}
+
+function pruneFileStreams() {
+  const now = Date.now()
+  for (const [token, entry] of fileStreams) {
+    if (entry.expiresAt <= now) fileStreams.delete(token)
+  }
+  while (fileStreams.size >= FILE_STREAM_MAX) {
+    fileStreams.delete(fileStreams.keys().next().value)
+  }
+}
+
+async function serveFile(request, response) {
+  const token = new URL(request.url || '/', 'http://127.0.0.1').pathname.split('/')[1]
+  const entry = fileStreams.get(token)
+  if (!entry || entry.expiresAt <= Date.now()) {
+    response.writeHead(404).end()
+    return
+  }
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    response.writeHead(405).end()
+    return
+  }
+  const stat = await fs.stat(entry.path)
+  if (!stat.isFile() || stat.size <= 0) {
+    response.writeHead(404).end()
+    return
+  }
+  const range = parseFileRange(request.headers.range, stat.size)
+  if (!range) {
+    response.writeHead(416, { 'content-range': `bytes */${stat.size}` }).end()
+    return
+  }
+  const headers = {
+    'accept-ranges': 'bytes',
+    'cache-control': 'no-store',
+    'content-length': String(range.end - range.start + 1),
+    'content-type': fileMimeType(entry.path)
+  }
+  if (range.partial) headers['content-range'] = `bytes ${range.start}-${range.end}/${stat.size}`
+  response.writeHead(range.partial ? 206 : 200, headers)
+  if (request.method === 'HEAD') {
+    response.end()
+    return
+  }
+  const stream = createReadStream(entry.path, { start: range.start, end: range.end })
+  stream.on('error', () => response.destroy())
+  stream.pipe(response)
+}
+
+async function startFileServer() {
+  if (fileServer) return fileServer
+  if (fileServerStart) return fileServerStart
+  fileServerStart = new Promise((resolve, reject) => {
+    const server = http.createServer((request, response) => {
+      void serveFile(request, response).catch(() => response.writeHead(500).end())
+    })
+    server.once('error', reject)
+    server.listen(0, '0.0.0.0', () => {
+      server.unref()
+      fileServer = server
+      resolve(server)
+    })
+  })
+  try {
+    return await fileServerStart
+  } finally {
+    fileServerStart = null
+  }
+}
+
+async function openPath(filePath) {
+  if (!isWsl()) return shell.openPath(filePath)
+  const resolved = path.resolve(filePath)
+  const insideMount = [...mounts.values()].some((mount) => {
+    const relative = path.relative(path.resolve(mount.target), resolved)
+    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
+  })
+  if (!insideMount) throw new Error('file is outside active mount')
+  const stat = await fs.stat(resolved)
+  if (!stat.isFile()) return shell.openPath(resolved)
+  pruneFileStreams()
+  const token = randomBytes(24).toString('hex')
+  fileStreams.set(token, { path: resolved, expiresAt: Date.now() + FILE_STREAM_TTL_MS })
+  const server = await startFileServer()
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('file stream address unavailable')
+  return shell.openExternal(`http://${wslHostAddress()}:${address.port}/${token}/${encodeURIComponent(path.basename(resolved))}`)
+}
+
 function apiFetch(pathname, { method = 'GET', body } = {}) {
   const headers = {}
   if (sessionToken) headers.authorization = `Bearer ${sessionToken}`
@@ -412,7 +544,7 @@ function registerIpc() {
   ipcMain.handle('mounts:rename', (_e, id, name) => renameMountProfile(id, name))
   ipcMain.handle('mounts:remove', (_e, id) => removeMount(id))
   ipcMain.handle('fs:list', (_e, dir) => listDir(dir))
-  ipcMain.handle('fs:openPath', (_e, p) => shell.openPath(p))
+  ipcMain.handle('fs:openPath', (_e, p) => openPath(p))
   ipcMain.handle('fs:home', () => app.getPath('home'))
 }
 
@@ -439,5 +571,6 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', function () {
   for (const id of [...mounts.keys()]) removeMount(id, false)
+  if (fileServer) fileServer.close()
   if (process.platform !== 'darwin') app.quit()
 })

@@ -13,7 +13,6 @@ stream_proxy/zig-out/
 /infinity-storage-mount
 /infinity-storage-mount.exe
 /infinity-storage-relay
-.env
 .env*.bak
 docs/relay-token.local.md
 docs/relay-config.local.md
