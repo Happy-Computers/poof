@@ -14,7 +14,6 @@ stream_proxy/zig-out/
 /infinity-storage-mount.exe
 /infinity-storage-relay
 .env
-.env.local
 .env*.bak
 docs/relay-token.local.md
 docs/relay-config.local.md
@@ -23,3 +22,4 @@ scripts/*.zsh
 
 # encrypted env (commit this; never commit plaintext .env)
 !.env.enc
+config.bat
