@@ -192,10 +192,14 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (session !== null && session !== undefined) {
-      void window.poof.syncMounts().then(refreshMounts)
-      void refreshProjects()
+    if (session === null || session === undefined) return
+    const sync = () => {
+      void window.poof.syncMounts().then(refreshMounts).catch(() => {})
     }
+    sync()
+    const interval = window.setInterval(sync, 2_000)
+    void refreshProjects()
+    return () => window.clearInterval(interval)
   }, [refreshMounts, refreshProjects, session])
 
   const browse = useCallback(async (dir: string) => {

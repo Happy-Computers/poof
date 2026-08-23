@@ -31,6 +31,14 @@ function mountTarget(m) {
   return isWindows() ? `${m.letter}:` : m.mountDir
 }
 
+function nextWindowsLetter() {
+  const used = new Set([...mounts.values()].map((mount) => mount.letter))
+  for (const letter of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+    if (!used.has(letter)) return letter
+  }
+  return null
+}
+
 async function createRelayTokenFile(id) {
   if (!LIVE_RELAY_URL) return null
   if (!sessionToken) throw new Error('sign in again before mounting shared storage')
@@ -158,14 +166,17 @@ async function createMount({ name, letter, projectId }, saveProfile = true, exis
 }
 
 async function syncMounts() {
-  if (isWindows()) return
   const profiles = await listMountProfiles()
   for (const profile of profiles) {
     const active = [...mounts.values()].some((mount) => mount.projectId === profile.projectId)
     if (active) continue
+    const letter = isWindows() ? nextWindowsLetter() : ''
+    if (isWindows() && letter === null) {
+      throw new Error('no free Windows drive letter')
+    }
     await createMount({
       name: profile.name,
-      letter: '',
+      letter: letter || '',
       projectId: profile.projectId
     }, false, profile)
   }
