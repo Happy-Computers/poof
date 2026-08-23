@@ -17,7 +17,9 @@ const S3_BUCKET = process.env.INFINITY_STORAGE_S3_BUCKET || 'amaan-space-test-1'
 const LIVE_RELAY_URL = process.env.INFINITY_STORAGE_LIVE_RELAY_URL || ''
 
 const mounts = new Map()
+const mountPromises = new Map()
 let nextId = 1
+let legacyMountDirectoriesCleaned = false
 
 let sessionToken = null
 let pendingAuth = null
@@ -92,21 +94,31 @@ async function deleteMountProfile(id) {
   }
 }
 
-async function createMount({ name, letter, projectId }, saveProfile = true, existingProfile = null) {
-  if (!name.trim() || !projectId) {
-    throw new Error('mount name and project are required')
+async function cleanupLegacyMountDirectories() {
+  if (isWindows() || legacyMountDirectoriesCleaned) return
+  legacyMountDirectoriesCleaned = true
+  const directory = path.join(app.getPath('temp'), 'infinity-storage')
+  await fs.mkdir(directory, { recursive: true })
+  const entries = await fs.readdir(directory, { withFileTypes: true })
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/-[0-9]+$/.test(entry.name)) continue
+    await fs.rmdir(path.join(directory, entry.name)).catch(() => {})
   }
+}
+
+async function createMountProcess({ name, letter, projectId }, saveProfile, existingProfile) {
   const project = (await listProjects()).find((p) => p.id === projectId)
   if (!project) throw new Error('project not found')
   if (isWindows() && !/^[A-Z]$/.test(letter)) throw new Error('drive letter required')
   const profile = existingProfile || (saveProfile ? await saveMountProfile(name.trim(), project.id) : null)
   const mountName = profile?.name || name.trim()
-  const id = String(nextId++)
+  const id = profile?.id || String(nextId++)
   let mountDir
   if (isWindows()) {
     mountDir = undefined
   } else {
-    mountDir = path.join(app.getPath('temp'), 'infinity-storage', `${mountName}-${id}`)
+    await cleanupLegacyMountDirectories()
+    mountDir = path.join(app.getPath('temp'), 'infinity-storage', mountName)
     await fs.mkdir(mountDir, { recursive: true })
   }
 
@@ -174,7 +186,25 @@ async function createMount({ name, letter, projectId }, saveProfile = true, exis
   return publicMount(mount)
 }
 
+async function createMount(options, saveProfile = true, existingProfile = null) {
+  const name = typeof options.name === 'string' ? options.name.trim() : ''
+  const projectId = options.projectId
+  if (!name || !projectId) throw new Error('mount name and project are required')
+  const active = [...mounts.values()].find((mount) => mount.projectId === projectId)
+  if (active) return publicMount(active)
+  const pending = mountPromises.get(projectId)
+  if (pending) return pending
+  const promise = createMountProcess({ ...options, name }, saveProfile, existingProfile)
+  mountPromises.set(projectId, promise)
+  try {
+    return await promise
+  } finally {
+    if (mountPromises.get(projectId) === promise) mountPromises.delete(projectId)
+  }
+}
+
 async function syncMounts() {
+  await cleanupLegacyMountDirectories()
   const profiles = await listMountProfiles()
   for (const profile of profiles) {
     const active = [...mounts.values()].some((mount) => mount.projectId === profile.projectId)

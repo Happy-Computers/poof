@@ -4,10 +4,12 @@ package linux
 
 import (
 	"context"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/amaan/infinity-storage/internal/catalog"
+	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
 func TestNewRootMultiWiring(t *testing.T) {
@@ -87,6 +89,22 @@ func (f *recordingWritableFile) Flush() error {
 func (f *recordingWritableFile) Close() error {
 	f.closed++
 	return nil
+}
+
+func TestSetattrAcceptsMetadataAndRejectsResize(t *testing.T) {
+	root := NewRootMulti([]catalog.Entry{{Name: "clip.mp4", Size: 42}}, nil)
+	file := &multiFile{root: root, name: "clip.mp4"}
+	out := &fuse.AttrOut{}
+	if errno := file.Setattr(context.Background(), nil, &fuse.SetAttrIn{}, out); errno != 0 {
+		t.Fatalf("metadata setattr: %v", errno)
+	}
+	if out.Size != 42 {
+		t.Fatalf("size=%d", out.Size)
+	}
+	resize := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE, Size: 41}}
+	if errno := file.Setattr(context.Background(), nil, resize, out); errno != syscall.EOPNOTSUPP {
+		t.Fatalf("resize errno=%v", errno)
+	}
 }
 
 func TestWriteHandleSealsOnFlush(t *testing.T) {

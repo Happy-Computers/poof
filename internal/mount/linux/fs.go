@@ -328,6 +328,21 @@ func (f *multiFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Att
 	return 0
 }
 
+func (f *multiFile) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	entry, ok := f.entry()
+	if !ok {
+		return syscall.ENOENT
+	}
+	size := entry.Size
+	if entry.Source != nil {
+		size = entry.Source.Size()
+	}
+	if requested, set := in.GetSize(); set && requested != size {
+		return syscall.EOPNOTSUPP
+	}
+	return f.Getattr(ctx, fh, out)
+}
+
 func (f *multiFile) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	entry, ok := f.entry()
 	if !ok {
@@ -374,6 +389,7 @@ func (f *multiFile) Release(ctx context.Context, fh fs.FileHandle) syscall.Errno
 }
 
 var _ = (fs.NodeGetattrer)((*multiFile)(nil))
+var _ = (fs.NodeSetattrer)((*multiFile)(nil))
 var _ = (fs.NodeOpener)((*multiFile)(nil))
 var _ = (fs.NodeReader)((*multiFile)(nil))
 var _ = (fs.NodeReleaser)((*multiFile)(nil))
