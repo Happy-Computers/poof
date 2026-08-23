@@ -374,7 +374,9 @@ const server = createServer((request, response) => {
         if (await handle_mounts(request, response)) return;
         if (await handle_projects(request, response)) return;
         await auth_handler(request, response);
-    })().catch(() => {
+    })().catch((error: unknown) => {
+        const detail = error instanceof Error ? error.stack ?? error.message : String(error);
+        console.error(`request failed ${request.method} ${request.url}: ${detail}`);
         if (response.headersSent === false) {
             response.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
         }
