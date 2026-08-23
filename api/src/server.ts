@@ -5,6 +5,7 @@ import { auth, database_pool } from "./auth.js";
 import { load_config } from "./config.js";
 
 const SHUTDOWN_TIMEOUT_MS = 5_000;
+const MOUNT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,99}$/;
 const config = load_config(process.env);
 const auth_handler = toNodeHandler(auth);
 
@@ -15,6 +16,10 @@ function json_response(
 ): void {
     response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
     response.end(JSON.stringify(body));
+}
+
+function valid_mount_name(name: string): boolean {
+    return MOUNT_NAME_PATTERN.test(name);
 }
 
 function request_headers(request: import("node:http").IncomingMessage): Headers {
@@ -64,6 +69,110 @@ async function handle_library_authorization(
         return true;
     }
     response.writeHead(204).end();
+    return true;
+}
+
+async function handle_mounts(
+    request: import("node:http").IncomingMessage,
+    response: import("node:http").ServerResponse,
+): Promise<boolean> {
+    const url = new URL(request.url ?? "/", config.auth_url);
+    const path_match = /^\/v1\/mounts(?:\/([^/]+))?$/.exec(url.pathname);
+    if (path_match === null) return false;
+
+    const user_id = await request_user_id(request);
+    if (user_id === null) {
+        json_response(response, 401, { error: "unauthorized" });
+        return true;
+    }
+
+    if (path_match[1] !== undefined) {
+        if (request.method !== "PATCH") {
+            json_response(response, 405, { error: "method not allowed" });
+            return true;
+        }
+        const body = await request_body(request) as { name?: unknown };
+        const name = typeof body.name === "string" ? body.name.trim() : "";
+        if (!valid_mount_name(name)) {
+            json_response(response, 400, { error: "mount name must start with a letter or number and use only letters, numbers, spaces, dots, dashes, and underscores" });
+            return true;
+        }
+        try {
+            const result = await database_pool.query(
+                `update infinity_storage.mounts
+                 set name = $1, updated_at = now()
+                 where id = $2 and user_id = $3
+                 returning id, name, project_id as "projectId"`,
+                [name, path_match[1], user_id],
+            );
+            if (result.rowCount !== 1) {
+                json_response(response, 404, { error: "mount not found" });
+                return true;
+            }
+            json_response(response, 200, { mount: result.rows[0] });
+        } catch (error) {
+            if ((error as { code?: string }).code === "23505") {
+                json_response(response, 409, { error: "mount name already exists" });
+                return true;
+            }
+            throw error;
+        }
+        return true;
+    }
+
+    if (request.method === "GET") {
+        const result = await database_pool.query(
+            `select id, name, project_id as "projectId"
+             from infinity_storage.mounts
+             where user_id = $1
+             order by created_at asc`,
+            [user_id],
+        );
+        json_response(response, 200, { mounts: result.rows });
+        return true;
+    }
+
+    if (request.method !== "POST") {
+        json_response(response, 405, { error: "method not allowed" });
+        return true;
+    }
+
+    const body = await request_body(request) as { name?: unknown; projectId?: unknown };
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const project_id = typeof body.projectId === "string" ? body.projectId : "";
+    if (!valid_mount_name(name)) {
+        json_response(response, 400, { error: "mount name must start with a letter or number and use only letters, numbers, spaces, dots, dashes, and underscores" });
+        return true;
+    }
+    if (project_id.length === 0) {
+        json_response(response, 400, { error: "project is required" });
+        return true;
+    }
+    const project = await database_pool.query(
+        "select id from infinity_storage.projects where id = $1 and user_id = $2",
+        [project_id, user_id],
+    );
+    if (project.rowCount !== 1) {
+        json_response(response, 404, { error: "project not found" });
+        return true;
+    }
+    try {
+        const result = await database_pool.query(
+            `insert into infinity_storage.mounts (id, user_id, project_id, name)
+             values ($1, $2, $3, $4)
+             on conflict (user_id, project_id) do update
+             set name = excluded.name, updated_at = now()
+             returning id, name, project_id as "projectId"`,
+            [randomUUID(), user_id, project_id, name],
+        );
+        json_response(response, 200, { mount: result.rows[0] });
+    } catch (error) {
+        if ((error as { code?: string }).code === "23505") {
+            json_response(response, 409, { error: "mount name already exists" });
+            return true;
+        }
+        throw error;
+    }
     return true;
 }
 
@@ -247,6 +356,7 @@ const server = createServer((request, response) => {
         if (await handle_desktop_sign_in(request, response)) return;
         if (await handle_desktop_bridge(request, response)) return;
         if (await handle_library_authorization(request, response)) return;
+        if (await handle_mounts(request, response)) return;
         if (await handle_projects(request, response)) return;
         await auth_handler(request, response);
     })().catch(() => {

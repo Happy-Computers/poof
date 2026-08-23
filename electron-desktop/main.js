@@ -45,18 +45,51 @@ async function removeRelayTokenFile(tokenFile) {
   if (tokenFile) await fs.rm(tokenFile, { force: true })
 }
 
-async function createMount({ name, letter, projectId }) {
+async function listMountProfiles() {
+  const res = await apiFetch('/v1/mounts')
+  if (!res.ok) throw new Error(`could not load mounts (${res.status})`)
+  return (await res.json()).mounts
+}
+
+async function saveMountProfile(name, projectId) {
+  const res = await apiFetch('/v1/mounts', {
+    method: 'POST',
+    body: { name, projectId }
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new Error(body?.error || `could not save mount (${res.status})`)
+  }
+  return (await res.json()).mount
+}
+
+async function renameMountProfile(id, name) {
+  const res = await apiFetch(`/v1/mounts/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: { name }
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new Error(body?.error || `could not rename mount (${res.status})`)
+  }
+  return (await res.json()).mount
+}
+
+async function createMount({ name, letter, projectId }, saveProfile = true, existingProfile = null) {
   if (!name.trim() || !projectId) {
     throw new Error('mount name and project are required')
   }
   const project = (await listProjects()).find((p) => p.id === projectId)
   if (!project) throw new Error('project not found')
+  if (isWindows() && !/^[A-Z]$/.test(letter)) throw new Error('drive letter required')
+  const profile = existingProfile || (saveProfile ? await saveMountProfile(name.trim(), project.id) : null)
+  const mountName = profile?.name || name.trim()
   const id = String(nextId++)
   let mountDir
   if (isWindows()) {
-    if (!/^[A-Z]$/.test(letter)) throw new Error('drive letter required')
+    mountDir = undefined
   } else {
-    mountDir = path.join(app.getPath('temp'), 'infinity-storage', `${name}-${id}`)
+    mountDir = path.join(app.getPath('temp'), 'infinity-storage', `${mountName}-${id}`)
     await fs.mkdir(mountDir, { recursive: true })
   }
 
@@ -107,9 +140,10 @@ async function createMount({ name, letter, projectId }) {
 
   const mount = {
     id,
-    name: name.trim(),
+    name: mountName,
     letter,
     projectId: project.id,
+    profileId: profile?.id,
     mountDir,
     target: mountTarget({ letter, mountDir }),
     child,
@@ -123,8 +157,30 @@ async function createMount({ name, letter, projectId }) {
   return publicMount(mount)
 }
 
+async function syncMounts() {
+  if (isWindows()) return
+  const profiles = await listMountProfiles()
+  for (const profile of profiles) {
+    const active = [...mounts.values()].some((mount) => mount.projectId === profile.projectId)
+    if (active) continue
+    await createMount({
+      name: profile.name,
+      letter: '',
+      projectId: profile.projectId
+    }, false, profile)
+  }
+  return [...mounts.values()].map(publicMount)
+}
+
 function publicMount(m) {
-  return { id: m.id, name: m.name, letter: m.letter, target: m.target }
+  return {
+    id: m.id,
+    name: m.name,
+    letter: m.letter,
+    projectId: m.projectId,
+    profileId: m.profileId,
+    target: m.target
+  }
 }
 
 async function removeMount(id) {
@@ -280,7 +336,9 @@ function registerIpc() {
   ipcMain.handle('projects:list', () => listProjects())
   ipcMain.handle('projects:create', (_e, name) => createProject(name))
   ipcMain.handle('mounts:create', (_e, opts) => createMount(opts))
+  ipcMain.handle('mounts:sync', () => syncMounts())
   ipcMain.handle('mounts:list', () => [...mounts.values()].map(publicMount))
+  ipcMain.handle('mounts:rename', (_e, id, name) => renameMountProfile(id, name))
   ipcMain.handle('mounts:remove', (_e, id) => removeMount(id))
   ipcMain.handle('fs:list', (_e, dir) => listDir(dir))
   ipcMain.handle('fs:openPath', (_e, p) => shell.openPath(p))

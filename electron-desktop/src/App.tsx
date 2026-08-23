@@ -69,6 +69,8 @@ interface MountInfo {
   id: string
   name: string
   letter: string
+  projectId: string
+  profileId: string
   target: string
 }
 
@@ -105,7 +107,9 @@ declare global {
       }): Promise<MountInfo>
       listProjects(): Promise<Project[]>
       createProject(name: string): Promise<Project>
+      syncMounts(): Promise<MountInfo[] | undefined>
       listMounts(): Promise<MountInfo[]>
+      renameMount(id: string, name: string): Promise<MountInfo>
       removeMount(id: string): Promise<boolean>
       listDir(dir?: string): Promise<{ path: string; entries: DirEntry[] }>
       openPath(p: string): Promise<string>
@@ -189,7 +193,7 @@ export default function App() {
 
   useEffect(() => {
     if (session !== null && session !== undefined) {
-      void refreshMounts()
+      void window.poof.syncMounts().then(refreshMounts)
       void refreshProjects()
     }
   }, [refreshMounts, refreshProjects, session])
@@ -219,7 +223,7 @@ export default function App() {
   )
 
   function openDialog() {
-    setName("")
+    setName(projects[0]?.name ?? "")
     setLetter(platform === "win32" ? (freeLetters[0] ?? "") : "")
     setProjectId(projects[0]?.id ?? "new")
     setCreateError("")
@@ -227,7 +231,7 @@ export default function App() {
   }
 
   async function createMount() {
-    if (projectId === "new" && !name.trim()) return
+    if (!name.trim()) return
     setCreating(true)
     setCreateError("")
     try {
@@ -237,7 +241,7 @@ export default function App() {
           : projects.find((p) => p.id === projectId)
       if (!project) throw new Error("select a project")
       const m = await window.poof.createMount({
-        name: project.name,
+        name: name.trim(),
         letter,
         projectId: project.id
       })
@@ -260,8 +264,9 @@ export default function App() {
     setDeleteTarget(null)
   }
 
-  function saveRename() {
+  async function saveRename() {
     if (!renameName.trim() || !renameTarget) return
+    await window.poof.renameMount(renameTarget.profileId, renameName.trim())
     setMounts((prev) =>
       prev.map((m) =>
         m.id === renameTarget.id ? { ...m, name: renameName.trim() } : m
@@ -457,7 +462,15 @@ export default function App() {
           <FieldGroup>
             <Field>
               <FieldLabel>Project</FieldLabel>
-              <Select value={projectId} onValueChange={setProjectId}>
+              <Select
+                value={projectId}
+                onValueChange={(value) => {
+                  setProjectId(value)
+                  if (value !== "new") {
+                    setName(projects.find((project) => project.id === value)?.name ?? "")
+                  }
+                }}
+              >
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Select a project" />
                 </SelectTrigger>
@@ -471,20 +484,20 @@ export default function App() {
                 </SelectContent>
               </Select>
             </Field>
-            {projectId === "new" && (
-              <Field>
-                <FieldLabel htmlFor="project-name">Project name</FieldLabel>
-                <Input
-                  id="project-name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="summer-shoot"
-                />
-                <FieldDescription>
-                  Files live in a private folder for this project.
-                </FieldDescription>
-              </Field>
-            )}
+            <Field>
+              <FieldLabel htmlFor="mount-name">Mount name</FieldLabel>
+              <Input
+                id="mount-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="summer-shoot"
+              />
+              <FieldDescription>
+                {projectId === "new"
+                  ? "Creates project with this name."
+                  : "Linux uses this name for its directory."}
+              </FieldDescription>
+            </Field>
             {platform === "win32" && (
               <Field>
                 <FieldLabel>Drive letter</FieldLabel>
@@ -512,7 +525,7 @@ export default function App() {
               Cancel
             </Button>
             <Button
-              disabled={creating || (projectId === "new" && !name.trim())}
+              disabled={creating || !name.trim()}
               onClick={createMount}
             >
               {creating ? "Mounting…" : "Create Mount"}
